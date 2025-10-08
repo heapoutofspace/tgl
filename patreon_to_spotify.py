@@ -685,10 +685,13 @@ def main():
                 console.print(f"[cyan]ℹ[/cyan] Found {len(retryable_tracks)} previously failed tracks to retry\n")
 
             if per_episode:
-                # Per-episode mode: Create individual playlists for each episode
+                # Per-episode mode: Create individual playlists for each episode + add to main playlist
                 console.print("[cyan]Per-episode mode: Creating individual playlists[/cyan]\n")
 
                 total_tracks_to_search = len(all_tracks) + len(retryable_tracks)
+
+                # Collect all track URIs for main playlist
+                all_track_uris = []
 
                 if total_tracks_to_search > 0:
                     search_task = progress.add_task("[cyan]Processing episodes...", total=total_tracks_to_search)
@@ -707,6 +710,7 @@ def main():
                             uri = spotify.search_track(track)
                             if uri:
                                 ep_track_uris.append(uri)
+                                all_track_uris.append(uri)  # Collect for main playlist
                             else:
                                 state.add_failed_track(track, episode['title'])
                             progress.update(search_task, advance=1)
@@ -739,11 +743,12 @@ def main():
                         state.mark_episode_processed(episode, len(ep_tracks))
                         state.save()
 
-                    # Retry previously failed tracks (add to appropriate episode playlists if needed)
+                    # Retry previously failed tracks
                     retry_found = 0
                     for track in retryable_tracks:
                         uri = spotify.search_track(track)
                         if uri:
+                            all_track_uris.append(uri)  # Add to main playlist
                             state.remove_failed_track(track['key'])
                             retry_found += 1
                         else:
@@ -759,7 +764,35 @@ def main():
                     console.print(f"[green]✓[/green] Created {playlists_created} new playlists")
                     if playlists_updated > 0:
                         console.print(f"[green]✓[/green] Updated {playlists_updated} existing playlists")
-                    console.print(f"[green]✓[/green] Added {total_tracks_added} total tracks\n")
+                    console.print(f"[green]✓[/green] Added {total_tracks_added} total tracks to episode playlists\n")
+
+                    # Also add all tracks to main combined playlist
+                    if all_track_uris:
+                        console.print(f"[cyan]Adding tracks to main playlist: {PLAYLIST_NAME}[/cyan]")
+                        main_playlist_id = spotify.get_playlist_by_name(PLAYLIST_NAME)
+
+                        if main_playlist_id:
+                            # Get existing tracks to avoid duplicates
+                            existing_tracks = spotify.get_playlist_tracks(main_playlist_id)
+                            new_tracks = [uri for uri in all_track_uris if uri not in existing_tracks]
+
+                            if new_tracks:
+                                num_added = spotify.add_tracks_to_playlist(main_playlist_id, new_tracks)
+                                console.print(f"[green]✓[/green] Added {num_added} new tracks to main playlist")
+                            else:
+                                console.print("[yellow]All tracks already in main playlist[/yellow]")
+                        else:
+                            # Create main playlist
+                            main_playlist_id = spotify.create_playlist(
+                                name=PLAYLIST_NAME,
+                                description="Tracks from Patreon DJ mixes"
+                            )
+                            num_added = spotify.add_tracks_to_playlist(main_playlist_id, all_track_uris)
+                            console.print(f"[green]✓[/green] Created main playlist and added {num_added} tracks")
+
+                        # Get playlist URL
+                        playlist_url = f"https://open.spotify.com/playlist/{main_playlist_id}"
+                        console.print(f"[dim]Main playlist: [link={playlist_url}]{playlist_url}[/link][/dim]\n")
             else:
                 # Combined mode: Create one playlist with all tracks
                 total_tracks_to_search = len(all_tracks) + len(retryable_tracks)

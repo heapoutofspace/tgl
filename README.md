@@ -200,6 +200,7 @@ uv run patreon_to_spotify.py --per-episode --year 2024
 
 **Key features:**
 - Creates one playlist per episode using the episode title as the playlist name
+- **Also adds all tracks to the main combined playlist** (e.g., "guestlistr") - best of both worlds!
 - Use `--playlist-prefix` to add a prefix for visual grouping in Spotify
 - Playlist names with the same prefix will group together in Spotify
 - Cache automatically tracks which episodes have playlists - only creates playlists for new episodes
@@ -211,11 +212,16 @@ uv run patreon_to_spotify.py --per-episode --year 2024
 - You can manually drag them into a folder in the Spotify app once
 - New playlists will continue to be added (you may need to manually move them to the folder)
 
+**What gets created:**
+- **Individual episode playlists**: One per episode (e.g., "TGL E390: Love Songs and Haunted Nights")
+- **Main combined playlist**: All tracks from all episodes (e.g., "guestlistr")
+- Result: You get the convenience of browsing by episode AND a master playlist with everything
+
 **Typical workflow:**
-1. First run: `uv run patreon_to_spotify.py --per-episode --playlist-prefix "TGL - "` creates playlists for all episodes
-2. In Spotify app: Create a folder and manually organize all "TGL - " playlists into it
-3. Weekly automated runs: New episodes automatically get playlists created
-4. Manually move new playlists to the folder as needed
+1. First run: `uv run patreon_to_spotify.py --per-episode --playlist-prefix "🎧 "` creates playlists for all episodes
+2. In Spotify app: Create a folder and manually organize all "🎧 " playlists into it
+3. Weekly automated runs: New episodes automatically get playlists created + main playlist updated
+4. Manually move new episode playlists to the folder as needed
 
 ### Smart Caching & Continuous Updates
 

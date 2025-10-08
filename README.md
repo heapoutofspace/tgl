@@ -83,6 +83,12 @@ uv run patreon_to_spotify.py --episodes 10
 
 # Or use the short form
 uv run patreon_to_spotify.py -n 5
+
+# List available years
+uv run patreon_to_spotify.py --years
+
+# Create playlist for a specific year
+uv run patreon_to_spotify.py --year 2023
 ```
 
 The first time you run it, uv will automatically install all dependencies defined in the script.
@@ -90,6 +96,8 @@ The first time you run it, uv will automatically install all dependencies define
 ### Command Line Options
 
 - `--episodes N` or `-n N`: Process only the N most recent episodes
+- `--year YYYY`: Filter episodes by specific year (e.g., 2024)
+- `--years`: List all available years from podcast episodes
 - `--dryrun`: Run in dry run mode (parse episodes and tracks without creating/updating Spotify playlist)
 - `--help` or `-h`: Show help message
 
@@ -107,6 +115,27 @@ In dry run mode, the script will:
 - Extract tracklists
 - Show a summary of tracks found
 - **Skip** all Spotify operations (no authentication required)
+
+### Year Filtering
+
+You can organize your playlists by year:
+
+```bash
+# List all available years with episode counts
+uv run patreon_to_spotify.py --years
+
+# Create a playlist for 2023 episodes only
+uv run patreon_to_spotify.py --year 2023
+
+# Get the last 10 episodes from 2024
+uv run patreon_to_spotify.py --year 2024 -n 10
+```
+
+**Key features:**
+- When using `--year`, the playlist name automatically includes the year (e.g., "guestlistr 2023")
+- The script fetches all episodes, filters by year, then applies the episode limit if specified
+- Separate playlists are created for each year, making it easy to organize tracks chronologically
+- Running the script multiple times with the same year updates the existing playlist
 
 ### First Run
 

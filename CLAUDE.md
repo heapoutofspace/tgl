@@ -15,6 +15,15 @@ uv run patreon_to_spotify.py
 # Process only the last N episodes
 uv run patreon_to_spotify.py -n 10
 
+# List all available years
+uv run patreon_to_spotify.py --years
+
+# Filter episodes by year (creates "Playlist Name YYYY")
+uv run patreon_to_spotify.py --year 2023
+
+# Combine year filter with episode limit
+uv run patreon_to_spotify.py --year 2024 -n 10
+
 # Dry run mode (no Spotify operations)
 uv run patreon_to_spotify.py -n 5 --dryrun
 ```
@@ -38,8 +47,11 @@ The script consists of three main classes:
 
 ### 1. PatreonPodcastFetcher
 - Fetches podcast episodes from RSS feed using `requests` (not direct `feedparser.parse()` to handle SSL properly)
-- Returns list of episodes with title, description, published date, and link
+- Returns list of episodes with title, description, published date, year, and link
+- Parses `published_parsed` from feedparser to extract year
 - Supports limiting to N most recent episodes
+- Can filter episodes by year
+- `get_available_years()` returns sorted list of years with episodes
 
 ### 2. TracklistParser
 - Strips HTML tags and unescapes HTML entities from episode descriptions
@@ -72,6 +84,17 @@ The parser expects tracks in format: `# Artist - Track` or `Artist - Track`
 
 ### SSL Handling
 Uses `requests.get()` to fetch RSS feed content, then passes to `feedparser.parse()`. This avoids SSL certificate verification errors that occur with direct URL parsing.
+
+### Year Filtering
+Episodes can be filtered by year:
+- Uses `published_parsed` from feedparser (time.struct_time) to extract year
+- When `--years` is used, displays Rich table with year and episode count, then exits
+- When `--year YYYY` is specified:
+  - Fetches ALL episodes first (ignores `-n` limit initially)
+  - Filters to episodes from specified year
+  - THEN applies `-n` limit if specified
+  - Appends year to playlist name (e.g., "guestlistr 2023")
+- Separate playlists created per year for easy organization
 
 ### Rich Progress Bars
 Progress display includes:

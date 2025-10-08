@@ -19,6 +19,8 @@ import json
 import argparse
 from typing import List, Dict, Optional
 from html import unescape
+from datetime import datetime
+import time
 import feedparser
 import requests
 import spotipy
@@ -26,6 +28,7 @@ from spotipy.oauth2 import SpotifyOAuth
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.table import Table
 
 # Load environment variables
 load_dotenv()
@@ -65,10 +68,17 @@ class PatreonPodcastFetcher:
             entries_to_process = feed.entries if limit is None else feed.entries[:limit]
 
             for entry in entries_to_process:
+                # Parse published date to get year
+                published_parsed = entry.get('published_parsed')
+                year = None
+                if published_parsed:
+                    year = published_parsed.tm_year
+
                 episode = {
                     'title': entry.get('title', ''),
                     'description': entry.get('description', '') or entry.get('summary', ''),
                     'published': entry.get('published', ''),
+                    'year': year,
                     'link': entry.get('link', '')
                 }
                 episodes.append(episode)
@@ -78,6 +88,19 @@ class PatreonPodcastFetcher:
         except requests.exceptions.RequestException as e:
             console.print(f"[red]Error fetching RSS feed: {e}[/red]")
             return []
+
+    def get_available_years(self) -> List[int]:
+        """Get list of available years from all episodes"""
+        episodes = self.fetch_episodes()
+        years = set()
+        for episode in episodes:
+            if episode['year']:
+                years.add(episode['year'])
+        return sorted(years, reverse=True)
+
+    def filter_by_year(self, episodes: List[Dict], year: int) -> List[Dict]:
+        """Filter episodes by year"""
+        return [ep for ep in episodes if ep.get('year') == year]
 
 
 class TracklistParser:
@@ -256,10 +279,23 @@ def main():
         action="store_true",
         help="Dry run mode: parse episodes and search tracks without creating/updating Spotify playlist"
     )
+    parser.add_argument(
+        "--years",
+        action="store_true",
+        help="List all available years from podcast episodes and exit"
+    )
+    parser.add_argument(
+        "--year",
+        type=int,
+        default=None,
+        help="Filter episodes by specific year (e.g., 2024)"
+    )
     args = parser.parse_args()
 
     episodes_limit = args.episodes
     dryrun = args.dryrun
+    list_years = args.years
+    filter_year = args.year
 
     console.print("\n[bold cyan]" + "═" * 60)
     console.print("[bold cyan]Patreon Podcast to Spotify Playlist")
@@ -269,15 +305,50 @@ def main():
 
     # Configuration
     RSS_URL = os.getenv('PATREON_RSS_URL')
-    PLAYLIST_NAME = os.getenv('SPOTIFY_PLAYLIST_NAME', 'guestlistr')
+    BASE_PLAYLIST_NAME = os.getenv('SPOTIFY_PLAYLIST_NAME', 'guestlistr')
+
+    # Add year to playlist name if filtering by year
+    if filter_year:
+        PLAYLIST_NAME = f"{BASE_PLAYLIST_NAME} {filter_year}"
+    else:
+        PLAYLIST_NAME = BASE_PLAYLIST_NAME
 
     if not RSS_URL:
         console.print("[red]Error: PATREON_RSS_URL not set in .env file[/red]")
-        raise typer.Exit(1)
+        raise SystemExit(1)
 
     # Initialize components
     fetcher = PatreonPodcastFetcher(RSS_URL)
     parser = TracklistParser()
+
+    # Handle --years flag (list years and exit)
+    if list_years:
+        console.print("[cyan]Fetching episodes to analyze years...[/cyan]\n")
+        years = fetcher.get_available_years()
+
+        if not years:
+            console.print("[yellow]No years found in episodes[/yellow]")
+            return
+
+        # Create a nice table
+        table = Table(title="Available Years", show_header=True, header_style="bold cyan")
+        table.add_column("Year", style="green", justify="center")
+        table.add_column("Episodes", style="yellow", justify="center")
+
+        # Count episodes per year
+        all_episodes = fetcher.fetch_episodes()
+        year_counts = {}
+        for episode in all_episodes:
+            year = episode.get('year')
+            if year:
+                year_counts[year] = year_counts.get(year, 0) + 1
+
+        for year in years:
+            table.add_row(str(year), str(year_counts.get(year, 0)))
+
+        console.print(table)
+        console.print(f"\n[dim]Use --year YYYY to filter episodes by year[/dim]\n")
+        return
 
     with Progress(
         SpinnerColumn(),
@@ -290,15 +361,39 @@ def main():
 
         # Fetch episodes
         fetch_task = progress.add_task("[cyan]Fetching episodes from RSS feed...", total=None)
-        fetched_episodes = fetcher.fetch_episodes(limit=episodes_limit)
-        progress.update(fetch_task, completed=True, total=1)
 
-        if not fetched_episodes:
-            console.print("[red]No episodes found![/red]")
-            raise typer.Exit(1)
+        # If filtering by year, fetch all episodes first, then filter
+        if filter_year:
+            fetched_episodes = fetcher.fetch_episodes(limit=None)
+            progress.update(fetch_task, completed=True, total=1)
 
-        episodes_desc = f"last {episodes_limit}" if episodes_limit else "all"
-        console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes ({episodes_desc})\n")
+            if not fetched_episodes:
+                console.print("[red]No episodes found![/red]")
+                raise SystemExit(1)
+
+            original_count = len(fetched_episodes)
+            fetched_episodes = fetcher.filter_by_year(fetched_episodes, filter_year)
+
+            if not fetched_episodes:
+                console.print(f"[red]No episodes found for year {filter_year}![/red]")
+                raise SystemExit(1)
+
+            # Apply limit after filtering if specified
+            if episodes_limit:
+                fetched_episodes = fetched_episodes[:episodes_limit]
+                console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes for year {filter_year} (limited to {episodes_limit}, out of {original_count} total)\n")
+            else:
+                console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes for year {filter_year} (out of {original_count} total)\n")
+        else:
+            fetched_episodes = fetcher.fetch_episodes(limit=episodes_limit)
+            progress.update(fetch_task, completed=True, total=1)
+
+            if not fetched_episodes:
+                console.print("[red]No episodes found![/red]")
+                raise SystemExit(1)
+
+            episodes_desc = f"last {episodes_limit}" if episodes_limit else "all"
+            console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes ({episodes_desc})\n")
 
         # Parse tracklists
         all_tracks = []

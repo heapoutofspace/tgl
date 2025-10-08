@@ -440,6 +440,11 @@ def main():
         action="store_true",
         help="Ignore cache and reprocess all episodes"
     )
+    parser.add_argument(
+        "--use-cache",
+        action="store_true",
+        help="Use cache even when filtering by year (by default --year skips cache)"
+    )
     args = parser.parse_args()
 
     episodes_limit = args.episodes
@@ -449,6 +454,7 @@ def main():
     show_cache = args.show_cache
     clean_cache = args.clean_cache
     force_refresh = args.force_refresh
+    use_cache = args.use_cache
 
     console.print("\n[bold cyan]" + "═" * 60)
     console.print("[bold cyan]Patreon Podcast to Spotify Playlist")
@@ -585,8 +591,11 @@ def main():
             episodes_desc = f"last {episodes_limit}" if episodes_limit else "all"
             console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes ({episodes_desc})\n")
 
-        # Filter out already-processed episodes (unless force refresh)
-        if not force_refresh:
+        # Filter out already-processed episodes
+        # Skip cache if: force_refresh OR (filtering by year AND not use_cache)
+        should_use_cache = not force_refresh and (not filter_year or use_cache)
+
+        if should_use_cache:
             new_episodes = [ep for ep in fetched_episodes if not state.is_episode_processed(ep['link'])]
             cached_count = len(fetched_episodes) - len(new_episodes)
 

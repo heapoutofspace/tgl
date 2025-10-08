@@ -128,7 +128,8 @@ State contents:
 - **Statistics**: Cumulative stats (episodes processed, tracks found, last run time)
 
 ### Caching Behavior
-- By default, already-processed episodes are skipped (unless `--force-refresh`)
+- By default, already-processed episodes are skipped (unless `--force-refresh` or `--year`)
+- **Year filtering**: `--year` skips cache by default (for full year playlist rebuilds), but can use cache with `--use-cache` flag
 - Failed tracks are automatically retried after 7 days, max 5 attempts
 - When retry succeeds, track is removed from failed list and added to playlist
 - State is saved after each successful run
@@ -145,6 +146,7 @@ State contents:
 - `--show-cache`: Display Rich table with cache statistics
 - `--clean-cache`: Remove tracks with 5+ failed attempts
 - `--force-refresh`: Bypass cache, reprocess all episodes
+- `--use-cache`: Force cache usage even with `--year` (e.g., `--year 2024 --use-cache` for incremental updates)
 
 ### Implementation Note
 Episode tracking uses episode `link` field as unique identifier. The `episode_tracks` dict tracks which tracks came from which episode for proper failure attribution.

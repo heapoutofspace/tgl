@@ -96,8 +96,9 @@ The first time you run it, uv will automatically install all dependencies define
 ### Command Line Options
 
 - `--episodes N` or `-n N`: Process only the N most recent episodes
-- `--year YYYY`: Filter episodes by specific year (e.g., 2024)
+- `--year YYYY`: Filter episodes by specific year (e.g., 2024) - **skips cache by default**
 - `--years`: List all available years from podcast episodes
+- `--use-cache`: Use cache even when filtering by year (e.g., `--year 2024 --use-cache`)
 - `--dryrun`: Run in dry run mode (parse episodes and tracks without creating/updating Spotify playlist)
 - `--show-cache`: Display cache statistics and exit
 - `--clean-cache`: Remove failed tracks that exceeded max retry attempts (5)
@@ -139,7 +140,8 @@ uv run patreon_to_spotify.py --year 2024 -n 10
 - When using `--year`, the playlist name automatically includes the year (e.g., "guestlistr 2023")
 - The script fetches all episodes, filters by year, then applies the episode limit if specified
 - Separate playlists are created for each year, making it easy to organize tracks chronologically
-- Running the script multiple times with the same year updates the existing playlist
+- **By default, `--year` skips the cache** and reprocesses all episodes for that year (useful for rebuilding year-specific playlists)
+- Use `--use-cache` with `--year` if you want incremental updates instead of full reprocessing
 
 ### Smart Caching & Continuous Updates
 

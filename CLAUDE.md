@@ -115,6 +115,40 @@ When using Rich console.print() with repeated characters, use string concatenati
 - **Correct:** `console.print("[bold cyan]" + "═" * 60)`
 - **Wrong:** `console.print("[bold cyan]═" * 60)` - prints each character on separate line
 
+## State Management & Caching
+
+### StateManager Class
+Manages persistent state with separate files for production and dryrun modes:
+- **Production mode**: `.guestlistr_state.json` (git-ignored)
+- **Dryrun mode**: `.guestlistr_state_dryrun.json` (git-ignored)
+
+State contents:
+- **Processed episodes**: Tracks episode links and metadata to skip on future runs
+- **Failed tracks**: Stores tracks not found on Spotify with retry metadata
+- **Statistics**: Cumulative stats (episodes processed, tracks found, last run time)
+
+### Caching Behavior
+- By default, already-processed episodes are skipped (unless `--force-refresh`)
+- Failed tracks are automatically retried after 7 days, max 5 attempts
+- When retry succeeds, track is removed from failed list and added to playlist
+- State is saved after each successful run
+- **Dryrun isolation**: `--dryrun` uses separate state file, never saves state, keeping production cache untouched
+
+### Failed Track Retry Logic
+1. Track not found → add to `failed_tracks` with attempt count = 1
+2. Next run (7+ days later) → retry search
+3. If found → add to playlist, remove from failed_tracks
+4. If not found → increment attempt_count
+5. After 5 attempts → stop retrying (use `--clean-cache` to remove)
+
+### Cache CLI Options
+- `--show-cache`: Display Rich table with cache statistics
+- `--clean-cache`: Remove tracks with 5+ failed attempts
+- `--force-refresh`: Bypass cache, reprocess all episodes
+
+### Implementation Note
+Episode tracking uses episode `link` field as unique identifier. The `episode_tracks` dict tracks which tracks came from which episode for proper failure attribution.
+
 ## Debugging Tracklist Parsing
 
 If tracks aren't being extracted:

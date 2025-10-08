@@ -261,6 +261,141 @@ class SpotifyPlaylistManager:
         return tracks
 
 
+class StateManager:
+    """Manages persistent state for episode processing and failed track retries"""
+
+    def __init__(self, state_file: str = ".guestlistr_state.json"):
+        self.state_file = state_file
+        self.state = self._load_state()
+
+    def _load_state(self) -> Dict:
+        """Load state from file or return empty state"""
+        if os.path.exists(self.state_file):
+            try:
+                with open(self.state_file, 'r') as f:
+                    return json.load(f)
+            except (json.JSONDecodeError, IOError) as e:
+                console.print(f"[yellow]Warning: Could not load state file: {e}[/yellow]")
+                return self._empty_state()
+        return self._empty_state()
+
+    def _empty_state(self) -> Dict:
+        """Return empty state structure"""
+        return {
+            "processed_episodes": {},
+            "failed_tracks": {},
+            "stats": {
+                "last_run": None,
+                "total_episodes_processed": 0,
+                "total_tracks_found": 0
+            }
+        }
+
+    def save(self):
+        """Save current state to file"""
+        try:
+            with open(self.state_file, 'w') as f:
+                json.dump(self.state, f, indent=2)
+        except IOError as e:
+            console.print(f"[red]Error saving state: {e}[/red]")
+
+    def is_episode_processed(self, episode_link: str) -> bool:
+        """Check if episode has already been processed"""
+        return episode_link in self.state["processed_episodes"]
+
+    def mark_episode_processed(self, episode: Dict, tracks_found: int):
+        """Mark episode as processed"""
+        self.state["processed_episodes"][episode['link']] = {
+            "title": episode['title'],
+            "processed_date": datetime.now().isoformat(),
+            "tracks_found": tracks_found,
+            "year": episode.get('year')
+        }
+        self.state["stats"]["total_episodes_processed"] += 1
+        self.state["stats"]["total_tracks_found"] += tracks_found
+        self.state["stats"]["last_run"] = datetime.now().isoformat()
+
+    def add_failed_track(self, track: Dict[str, str], episode_title: str):
+        """Add or update a failed track"""
+        track_key = f"{track['artist']} - {track['track']}"
+
+        if track_key in self.state["failed_tracks"]:
+            # Update existing failed track
+            self.state["failed_tracks"][track_key]["attempt_count"] += 1
+            self.state["failed_tracks"][track_key]["last_attempt"] = datetime.now().isoformat()
+        else:
+            # New failed track
+            self.state["failed_tracks"][track_key] = {
+                "artist": track['artist'],
+                "track": track['track'],
+                "source_episode": episode_title,
+                "first_attempt": datetime.now().isoformat(),
+                "last_attempt": datetime.now().isoformat(),
+                "attempt_count": 1
+            }
+
+    def remove_failed_track(self, track_key: str):
+        """Remove a track from failed tracks (found on Spotify)"""
+        if track_key in self.state["failed_tracks"]:
+            del self.state["failed_tracks"][track_key]
+
+    def get_retryable_failed_tracks(self, max_attempts: int = 5, retry_after_days: int = 7) -> List[Dict]:
+        """Get failed tracks that should be retried"""
+        retryable = []
+        now = datetime.now()
+
+        for track_key, track_data in self.state["failed_tracks"].items():
+            # Skip if exceeded max attempts
+            if track_data["attempt_count"] >= max_attempts:
+                continue
+
+            # Check if enough time has passed since last attempt
+            last_attempt = datetime.fromisoformat(track_data["last_attempt"])
+            days_since_attempt = (now - last_attempt).days
+
+            if days_since_attempt >= retry_after_days:
+                retryable.append({
+                    "key": track_key,
+                    "artist": track_data["artist"],
+                    "track": track_data["track"],
+                    "query": f"{track_data['artist']} {track_data['track']}",
+                    "attempt_count": track_data["attempt_count"]
+                })
+
+        return retryable
+
+    def clean_old_failures(self, max_attempts: int = 5) -> int:
+        """Remove failed tracks that have exceeded max attempts"""
+        to_remove = [
+            key for key, data in self.state["failed_tracks"].items()
+            if data["attempt_count"] >= max_attempts
+        ]
+
+        for key in to_remove:
+            del self.state["failed_tracks"][key]
+
+        return len(to_remove)
+
+    def get_stats(self) -> Dict:
+        """Get statistics about the cache"""
+        failed_count = len(self.state["failed_tracks"])
+        retryable_count = len(self.get_retryable_failed_tracks())
+        maxed_out_count = sum(
+            1 for data in self.state["failed_tracks"].values()
+            if data["attempt_count"] >= 5
+        )
+
+        return {
+            "processed_episodes": len(self.state["processed_episodes"]),
+            "failed_tracks_total": failed_count,
+            "failed_tracks_retryable": retryable_count,
+            "failed_tracks_maxed_out": maxed_out_count,
+            "total_episodes_processed": self.state["stats"]["total_episodes_processed"],
+            "total_tracks_found": self.state["stats"]["total_tracks_found"],
+            "last_run": self.state["stats"]["last_run"]
+        }
+
+
 def main():
     """Main execution function"""
     # Parse command line arguments
@@ -290,12 +425,30 @@ def main():
         default=None,
         help="Filter episodes by specific year (e.g., 2024)"
     )
+    parser.add_argument(
+        "--show-cache",
+        action="store_true",
+        help="Show cache statistics and exit"
+    )
+    parser.add_argument(
+        "--clean-cache",
+        action="store_true",
+        help="Remove failed tracks that have exceeded max retry attempts"
+    )
+    parser.add_argument(
+        "--force-refresh",
+        action="store_true",
+        help="Ignore cache and reprocess all episodes"
+    )
     args = parser.parse_args()
 
     episodes_limit = args.episodes
     dryrun = args.dryrun
     list_years = args.years
     filter_year = args.year
+    show_cache = args.show_cache
+    clean_cache = args.clean_cache
+    force_refresh = args.force_refresh
 
     console.print("\n[bold cyan]" + "═" * 60)
     console.print("[bold cyan]Patreon Podcast to Spotify Playlist")
@@ -320,6 +473,43 @@ def main():
     # Initialize components
     fetcher = PatreonPodcastFetcher(RSS_URL)
     parser = TracklistParser()
+
+    # Use separate state file for dryrun mode
+    state_file = ".guestlistr_state_dryrun.json" if dryrun else ".guestlistr_state.json"
+    state = StateManager(state_file)
+
+    # Handle --show-cache flag (show cache stats and exit)
+    if show_cache:
+        stats = state.get_stats()
+
+        table = Table(title="Cache Statistics", show_header=True, header_style="bold cyan")
+        table.add_column("Metric", style="cyan")
+        table.add_column("Value", style="green", justify="right")
+
+        table.add_row("Processed Episodes", str(stats["processed_episodes"]))
+        table.add_row("Total Episodes Processed (all time)", str(stats["total_episodes_processed"]))
+        table.add_row("Total Tracks Found (all time)", str(stats["total_tracks_found"]))
+        table.add_row("Failed Tracks (total)", str(stats["failed_tracks_total"]))
+        table.add_row("Failed Tracks (retryable)", str(stats["failed_tracks_retryable"]))
+        table.add_row("Failed Tracks (maxed out)", str(stats["failed_tracks_maxed_out"]))
+
+        if stats["last_run"]:
+            last_run_dt = datetime.fromisoformat(stats["last_run"])
+            table.add_row("Last Run", last_run_dt.strftime("%Y-%m-%d %H:%M:%S"))
+        else:
+            table.add_row("Last Run", "Never")
+
+        console.print(table)
+        console.print(f"\n[dim]Cache file: {state.state_file}[/dim]\n")
+        return
+
+    # Handle --clean-cache flag (clean old failures and exit)
+    if clean_cache:
+        console.print("[cyan]Cleaning old failed tracks...[/cyan]")
+        removed = state.clean_old_failures()
+        state.save()
+        console.print(f"[green]✓[/green] Removed {removed} failed tracks that exceeded max retry attempts\n")
+        return
 
     # Handle --years flag (list years and exit)
     if list_years:
@@ -395,16 +585,36 @@ def main():
             episodes_desc = f"last {episodes_limit}" if episodes_limit else "all"
             console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes ({episodes_desc})\n")
 
-        # Parse tracklists
+        # Filter out already-processed episodes (unless force refresh)
+        if not force_refresh:
+            new_episodes = [ep for ep in fetched_episodes if not state.is_episode_processed(ep['link'])]
+            cached_count = len(fetched_episodes) - len(new_episodes)
+
+            if cached_count > 0:
+                console.print(f"[cyan]ℹ[/cyan] Skipping {cached_count} already-processed episodes (use --force-refresh to reprocess)\n")
+
+            fetched_episodes = new_episodes
+
+        if not fetched_episodes and not dryrun:
+            console.print("[yellow]No new episodes to process[/yellow]\n")
+            # Still check for retryable failed tracks
+        elif fetched_episodes:
+            console.print(f"[cyan]Processing {len(fetched_episodes)} new episodes...[/cyan]\n")
+
+        # Parse tracklists from new episodes
         all_tracks = []
-        parse_task = progress.add_task("[cyan]Parsing tracklists...", total=len(fetched_episodes))
+        episode_tracks = {}  # Track which episode each track came from
 
-        for episode in fetched_episodes:
-            tracks = parser.parse_tracklist(episode['description'])
-            all_tracks.extend(tracks)
-            progress.update(parse_task, advance=1)
+        if fetched_episodes:
+            parse_task = progress.add_task("[cyan]Parsing tracklists...", total=len(fetched_episodes))
 
-        console.print(f"[green]✓[/green] Extracted {len(all_tracks)} tracks from episodes\n")
+            for episode in fetched_episodes:
+                tracks = parser.parse_tracklist(episode['description'])
+                all_tracks.extend(tracks)
+                episode_tracks[episode['link']] = tracks
+                progress.update(parse_task, advance=1)
+
+            console.print(f"[green]✓[/green] Extracted {len(all_tracks)} tracks from {len(fetched_episodes)} new episodes\n")
 
         if dryrun:
             # Dry run mode - skip Spotify operations
@@ -423,17 +633,66 @@ def main():
             spotify = SpotifyPlaylistManager()
             console.print("[green]✓[/green] Connected to Spotify\n")
 
+            # Get retryable failed tracks
+            retryable_tracks = state.get_retryable_failed_tracks()
+
+            if retryable_tracks:
+                console.print(f"[cyan]ℹ[/cyan] Found {len(retryable_tracks)} previously failed tracks to retry\n")
+
+            # Combine new tracks with retryable tracks
+            total_tracks_to_search = len(all_tracks) + len(retryable_tracks)
+
             # Search for tracks on Spotify
             track_uris = []
-            search_task = progress.add_task("[cyan]Searching tracks on Spotify...", total=len(all_tracks))
+            failed_tracks = []
 
-            for track in all_tracks:
-                uri = spotify.search_track(track)
-                if uri:
-                    track_uris.append(uri)
-                progress.update(search_task, advance=1)
+            if total_tracks_to_search > 0:
+                search_task = progress.add_task("[cyan]Searching tracks on Spotify...", total=total_tracks_to_search)
 
-            console.print(f"[green]✓[/green] Found {len(track_uris)}/{len(all_tracks)} tracks on Spotify\n")
+                # Search new tracks from episodes
+                for track in all_tracks:
+                    uri = spotify.search_track(track)
+                    if uri:
+                        track_uris.append(uri)
+                    else:
+                        # Track not found - will be marked as failed
+                        failed_tracks.append(track)
+                    progress.update(search_task, advance=1)
+
+                # Retry previously failed tracks
+                retry_found = 0
+                for track in retryable_tracks:
+                    uri = spotify.search_track(track)
+                    if uri:
+                        track_uris.append(uri)
+                        state.remove_failed_track(track['key'])
+                        retry_found += 1
+                    else:
+                        # Still not found, increment attempt count
+                        state.add_failed_track(track, "retry")
+                    progress.update(search_task, advance=1)
+
+                if retry_found > 0:
+                    console.print(f"[green]✓[/green] Found {retry_found} previously failed tracks on Spotify!\n")
+
+                console.print(f"[green]✓[/green] Found {len(track_uris)}/{total_tracks_to_search} tracks on Spotify\n")
+
+                # Mark failed tracks
+                for track in failed_tracks:
+                    # Find which episode this track came from
+                    episode_title = "Unknown"
+                    for ep_link, tracks in episode_tracks.items():
+                        if track in tracks:
+                            # Find episode by link
+                            for ep in fetched_episodes:
+                                if ep['link'] == ep_link:
+                                    episode_title = ep['title']
+                                    break
+                            break
+                    state.add_failed_track(track, episode_title)
+
+                if failed_tracks:
+                    console.print(f"[yellow]⚠[/yellow] {len(failed_tracks)} tracks not found (will retry on next run)\n")
 
             # Create or update playlist
             playlist_id = spotify.get_playlist_by_name(PLAYLIST_NAME)
@@ -458,6 +717,14 @@ def main():
                 )
                 num_added = spotify.add_tracks_to_playlist(playlist_id, track_uris)
                 console.print(f"[green]✓[/green] Created playlist and added {num_added} tracks")
+
+            # Mark processed episodes in state
+            for episode in fetched_episodes:
+                tracks_count = len(episode_tracks.get(episode['link'], []))
+                state.mark_episode_processed(episode, tracks_count)
+
+            # Save state
+            state.save()
 
             # Get playlist URL
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"

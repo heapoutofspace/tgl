@@ -30,6 +30,10 @@ wheels/
 .cache
 .cache-*
 
+# State file
+.guestlistr_state.json
+.guestlistr_state_dryrun.json
+
 # IDE
 .vscode/
 .idea/

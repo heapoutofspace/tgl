@@ -99,6 +99,9 @@ The first time you run it, uv will automatically install all dependencies define
 - `--year YYYY`: Filter episodes by specific year (e.g., 2024)
 - `--years`: List all available years from podcast episodes
 - `--dryrun`: Run in dry run mode (parse episodes and tracks without creating/updating Spotify playlist)
+- `--show-cache`: Display cache statistics and exit
+- `--clean-cache`: Remove failed tracks that exceeded max retry attempts (5)
+- `--force-refresh`: Ignore cache and reprocess all episodes
 - `--help` or `-h`: Show help message
 
 ### Dry Run Mode
@@ -115,6 +118,7 @@ In dry run mode, the script will:
 - Extract tracklists
 - Show a summary of tracks found
 - **Skip** all Spotify operations (no authentication required)
+- Use a separate cache file (`.guestlistr_state_dryrun.json`) that doesn't affect your main cache
 
 ### Year Filtering
 
@@ -136,6 +140,35 @@ uv run patreon_to_spotify.py --year 2024 -n 10
 - The script fetches all episodes, filters by year, then applies the episode limit if specified
 - Separate playlists are created for each year, making it easy to organize tracks chronologically
 - Running the script multiple times with the same year updates the existing playlist
+
+### Smart Caching & Continuous Updates
+
+The script automatically tracks processed episodes and failed tracks, making it perfect for regular weekly updates:
+
+```bash
+# Run weekly to add new episodes - only processes new content
+uv run patreon_to_spotify.py
+
+# Check what's been cached
+uv run patreon_to_spotify.py --show-cache
+
+# Force reprocess everything (ignores cache)
+uv run patreon_to_spotify.py --force-refresh
+
+# Clean up failed tracks that exceeded retry limit
+uv run patreon_to_spotify.py --clean-cache
+```
+
+**How it works:**
+- **Episode Tracking**: Already-processed episodes are skipped automatically
+- **Failed Track Retry**: Tracks not found on Spotify are retried after 7 days (perfect for newly released tracks!)
+- **Max Attempts**: Each track is retried up to 5 times before being marked as permanently unavailable
+- **State File**: Everything is stored in `.guestlistr_state.json` (automatically created)
+
+**Typical workflow:**
+1. First run: Processes all episodes, finds most tracks, records failures
+2. Weekly runs: Only processes new episodes, automatically retries old failures
+3. Result: Continuous playlist enrichment as new episodes release and tracks become available!
 
 ### First Run
 

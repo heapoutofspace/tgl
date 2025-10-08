@@ -456,6 +456,12 @@ def main():
         default="",
         help="Prefix for playlist names in per-episode mode (e.g., 'TGL - ' results in 'TGL - Episode Title')"
     )
+    parser.add_argument(
+        "--episode-num",
+        type=int,
+        default=None,
+        help="Process a specific episode number (e.g., 390 for 'E390'). Bypasses cache for that episode."
+    )
     args = parser.parse_args()
 
     episodes_limit = args.episodes
@@ -468,6 +474,7 @@ def main():
     use_cache = args.use_cache
     per_episode = args.per_episode
     playlist_prefix = args.playlist_prefix
+    episode_num = args.episode_num
 
     console.print("\n[bold cyan]" + "═" * 60)
     console.print("[bold cyan]Patreon Podcast to Spotify Playlist")
@@ -571,8 +578,8 @@ def main():
         # Fetch episodes
         fetch_task = progress.add_task("[cyan]Fetching episodes from RSS feed...", total=None)
 
-        # If filtering by year, fetch all episodes first, then filter
-        if filter_year:
+        # If filtering by episode number or year, fetch all episodes first
+        if episode_num or filter_year:
             fetched_episodes = fetcher.fetch_episodes(limit=None)
             progress.update(fetch_task, completed=True, total=1)
 
@@ -581,18 +588,34 @@ def main():
                 raise SystemExit(1)
 
             original_count = len(fetched_episodes)
-            fetched_episodes = fetcher.filter_by_year(fetched_episodes, filter_year)
 
-            if not fetched_episodes:
-                console.print(f"[red]No episodes found for year {filter_year}![/red]")
-                raise SystemExit(1)
+            # Filter by episode number if specified
+            if episode_num:
+                # Match episode number in title (e.g., "E390", "e390", "Episode 390")
+                import re
+                episode_pattern = re.compile(rf'\be{episode_num}\b|\bepisode\s+{episode_num}\b', re.IGNORECASE)
+                fetched_episodes = [ep for ep in fetched_episodes if episode_pattern.search(ep['title'])]
 
-            # Apply limit after filtering if specified
-            if episodes_limit:
-                fetched_episodes = fetched_episodes[:episodes_limit]
-                console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes for year {filter_year} (limited to {episodes_limit}, out of {original_count} total)\n")
-            else:
-                console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes for year {filter_year} (out of {original_count} total)\n")
+                if not fetched_episodes:
+                    console.print(f"[red]No episode found matching number {episode_num}![/red]")
+                    raise SystemExit(1)
+
+                console.print(f"[green]✓[/green] Found episode {episode_num}: {fetched_episodes[0]['title']}\n")
+
+            # Filter by year if specified
+            elif filter_year:
+                fetched_episodes = fetcher.filter_by_year(fetched_episodes, filter_year)
+
+                if not fetched_episodes:
+                    console.print(f"[red]No episodes found for year {filter_year}![/red]")
+                    raise SystemExit(1)
+
+                # Apply limit after filtering if specified
+                if episodes_limit:
+                    fetched_episodes = fetched_episodes[:episodes_limit]
+                    console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes for year {filter_year} (limited to {episodes_limit}, out of {original_count} total)\n")
+                else:
+                    console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes for year {filter_year} (out of {original_count} total)\n")
         else:
             fetched_episodes = fetcher.fetch_episodes(limit=episodes_limit)
             progress.update(fetch_task, completed=True, total=1)
@@ -605,8 +628,8 @@ def main():
             console.print(f"[green]✓[/green] Found {len(fetched_episodes)} episodes ({episodes_desc})\n")
 
         # Filter out already-processed episodes
-        # Skip cache if: force_refresh OR (filtering by year AND not use_cache)
-        should_use_cache = not force_refresh and (not filter_year or use_cache)
+        # Skip cache if: force_refresh OR episode_num OR (filtering by year AND not use_cache)
+        should_use_cache = not force_refresh and not episode_num and (not filter_year or use_cache)
 
         if should_use_cache:
             new_episodes = [ep for ep in fetched_episodes if not state.is_episode_processed(ep['link'])]

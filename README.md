@@ -98,6 +98,7 @@ The first time you run it, uv will automatically install all dependencies define
 - `--episodes N` or `-n N`: Process only the N most recent episodes
 - `--year YYYY`: Filter episodes by specific year (e.g., 2024) - **skips cache by default**
 - `--years`: List all available years from podcast episodes
+- `--episode-num NUM`: Process a specific episode number (e.g., 390 for "E390") - **bypasses cache**
 - `--use-cache`: Use cache even when filtering by year (e.g., `--year 2024 --use-cache`)
 - `--per-episode`: Create individual playlists for each episode instead of one combined playlist
 - `--playlist-prefix PREFIX`: Prefix for playlist names in per-episode mode (e.g., `"TGL - "`)
@@ -145,6 +146,33 @@ uv run patreon_to_spotify.py --year 2024 -n 10
 - **By default, `--year` skips the cache** and reprocesses all episodes for that year (useful for rebuilding year-specific playlists)
 - Use `--use-cache` with `--year` if you want incremental updates instead of full reprocessing
 
+### Reprocessing a Specific Episode
+
+Reprocess a single episode by its episode number (bypasses cache):
+
+```bash
+# Reprocess episode 390 and add to combined playlist
+uv run patreon_to_spotify.py --episode-num 390
+
+# Reprocess episode 390 and update its individual playlist
+uv run patreon_to_spotify.py --episode-num 390 --per-episode
+
+# Test which tracks would be found without making changes
+uv run patreon_to_spotify.py --episode-num 390 --dryrun
+```
+
+**Key features:**
+- Matches episode number in title (e.g., "E390", "e390", "Episode 390")
+- **Automatically bypasses cache** - always reprocesses the episode
+- Useful for fixing episodes where tracks were initially missed
+- Works with both combined and per-episode modes
+- Perfect for retrying when a track becomes available on Spotify later
+
+**Example use cases:**
+- Episode had missing tracks → Spotify just added them → `--episode-num 390`
+- Tracklist in RSS was updated → `--episode-num 390`
+- Want to check what tracks are in a specific episode → `--episode-num 390 --dryrun`
+
 ### Per-Episode Playlists
 
 Create individual Spotify playlists for each episode:
@@ -157,15 +185,22 @@ uv run patreon_to_spotify.py --per-episode
 uv run patreon_to_spotify.py --per-episode -n 10
 
 # Add a prefix to all playlist names for organization
-uv run patreon_to_spotify.py --per-episode --playlist-prefix "TGL - "
+uv run patreon_to_spotify.py --per-episode --playlist-prefix "🎧 "
 
 # Combine with year filtering
 uv run patreon_to_spotify.py --per-episode --year 2024
 ```
 
+**Playlist naming:**
+- **Without prefix**: Playlist name = episode title exactly as it appears in RSS
+  - Example: "TGL E390: Love Songs and Haunted Nights"
+- **With prefix**: Playlist name = prefix + episode title
+  - `--playlist-prefix "🎧 "` → "🎧 TGL E390: Love Songs and Haunted Nights"
+  - `--playlist-prefix "[Podcast] "` → "[Podcast] TGL E390: Love Songs and Haunted Nights"
+
 **Key features:**
 - Creates one playlist per episode using the episode title as the playlist name
-- Use `--playlist-prefix` to add a prefix (e.g., "TGL - E390: Love Songs" instead of "E390: Love Songs")
+- Use `--playlist-prefix` to add a prefix for visual grouping in Spotify
 - Playlist names with the same prefix will group together in Spotify
 - Cache automatically tracks which episodes have playlists - only creates playlists for new episodes
 - Perfect for automated weekly runs: just add `--per-episode` to your cron job

@@ -166,6 +166,7 @@ uv run patreon_to_spotify.py --clean-cache
 - **Failed Track Retry**: Tracks not found on Spotify are retried after 7 days (perfect for newly released tracks!)
 - **Max Attempts**: Each track is retried up to 5 times before being marked as permanently unavailable
 - **State File**: Everything is stored in `.guestlistr_state.json` (automatically created)
+- **Incremental Saving**: State is saved after each episode is processed, so you can safely cancel (Ctrl+C) and resume later
 
 **Typical workflow:**
 1. First run: Processes all episodes, finds most tracks, records failures

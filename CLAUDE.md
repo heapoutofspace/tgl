@@ -132,7 +132,7 @@ State contents:
 - **Year filtering**: `--year` skips cache by default (for full year playlist rebuilds), but can use cache with `--use-cache` flag
 - Failed tracks are automatically retried after 7 days, max 5 attempts
 - When retry succeeds, track is removed from failed list and added to playlist
-- State is saved after each successful run
+- **Incremental state saving**: State is saved after each episode is processed (not at the end), allowing safe cancellation
 - **Dryrun isolation**: `--dryrun` uses separate state file, never saves state, keeping production cache untouched
 
 ### Failed Track Retry Logic

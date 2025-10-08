@@ -658,15 +658,23 @@ def main():
             if total_tracks_to_search > 0:
                 search_task = progress.add_task("[cyan]Searching tracks on Spotify...", total=total_tracks_to_search)
 
-                # Search new tracks from episodes
-                for track in all_tracks:
-                    uri = spotify.search_track(track)
-                    if uri:
-                        track_uris.append(uri)
-                    else:
-                        # Track not found - will be marked as failed
-                        failed_tracks.append(track)
-                    progress.update(search_task, advance=1)
+                # Search new tracks from episodes (with incremental state saving)
+                for episode in fetched_episodes:
+                    ep_tracks = episode_tracks.get(episode['link'], [])
+
+                    for track in ep_tracks:
+                        uri = spotify.search_track(track)
+                        if uri:
+                            track_uris.append(uri)
+                        else:
+                            # Track not found - will be marked as failed
+                            failed_tracks.append(track)
+                            state.add_failed_track(track, episode['title'])
+                        progress.update(search_task, advance=1)
+
+                    # Mark episode as processed and save state incrementally
+                    state.mark_episode_processed(episode, len(ep_tracks))
+                    state.save()
 
                 # Retry previously failed tracks
                 retry_found = 0
@@ -681,24 +689,14 @@ def main():
                         state.add_failed_track(track, "retry")
                     progress.update(search_task, advance=1)
 
+                # Save state after processing retries
+                if retryable_tracks:
+                    state.save()
+
                 if retry_found > 0:
                     console.print(f"[green]✓[/green] Found {retry_found} previously failed tracks on Spotify!\n")
 
                 console.print(f"[green]✓[/green] Found {len(track_uris)}/{total_tracks_to_search} tracks on Spotify\n")
-
-                # Mark failed tracks
-                for track in failed_tracks:
-                    # Find which episode this track came from
-                    episode_title = "Unknown"
-                    for ep_link, tracks in episode_tracks.items():
-                        if track in tracks:
-                            # Find episode by link
-                            for ep in fetched_episodes:
-                                if ep['link'] == ep_link:
-                                    episode_title = ep['title']
-                                    break
-                            break
-                    state.add_failed_track(track, episode_title)
 
                 if failed_tracks:
                     console.print(f"[yellow]⚠[/yellow] {len(failed_tracks)} tracks not found (will retry on next run)\n")
@@ -726,14 +724,6 @@ def main():
                 )
                 num_added = spotify.add_tracks_to_playlist(playlist_id, track_uris)
                 console.print(f"[green]✓[/green] Created playlist and added {num_added} tracks")
-
-            # Mark processed episodes in state
-            for episode in fetched_episodes:
-                tracks_count = len(episode_tracks.get(episode['link'], []))
-                state.mark_episode_processed(episode, tracks_count)
-
-            # Save state
-            state.save()
 
             # Get playlist URL
             playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"

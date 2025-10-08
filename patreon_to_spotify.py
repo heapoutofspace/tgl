@@ -445,6 +445,17 @@ def main():
         action="store_true",
         help="Use cache even when filtering by year (by default --year skips cache)"
     )
+    parser.add_argument(
+        "--per-episode",
+        action="store_true",
+        help="Create individual playlists for each episode instead of one combined playlist"
+    )
+    parser.add_argument(
+        "--playlist-prefix",
+        type=str,
+        default="",
+        help="Prefix for playlist names in per-episode mode (e.g., 'TGL - ' results in 'TGL - Episode Title')"
+    )
     args = parser.parse_args()
 
     episodes_limit = args.episodes
@@ -455,6 +466,8 @@ def main():
     clean_cache = args.clean_cache
     force_refresh = args.force_refresh
     use_cache = args.use_cache
+    per_episode = args.per_episode
+    playlist_prefix = args.playlist_prefix
 
     console.print("\n[bold cyan]" + "═" * 60)
     console.print("[bold cyan]Patreon Podcast to Spotify Playlist")
@@ -648,86 +661,162 @@ def main():
             if retryable_tracks:
                 console.print(f"[cyan]ℹ[/cyan] Found {len(retryable_tracks)} previously failed tracks to retry\n")
 
-            # Combine new tracks with retryable tracks
-            total_tracks_to_search = len(all_tracks) + len(retryable_tracks)
+            if per_episode:
+                # Per-episode mode: Create individual playlists for each episode
+                console.print("[cyan]Per-episode mode: Creating individual playlists[/cyan]\n")
 
-            # Search for tracks on Spotify
-            track_uris = []
-            failed_tracks = []
+                total_tracks_to_search = len(all_tracks) + len(retryable_tracks)
 
-            if total_tracks_to_search > 0:
-                search_task = progress.add_task("[cyan]Searching tracks on Spotify...", total=total_tracks_to_search)
+                if total_tracks_to_search > 0:
+                    search_task = progress.add_task("[cyan]Processing episodes...", total=total_tracks_to_search)
 
-                # Search new tracks from episodes (with incremental state saving)
-                for episode in fetched_episodes:
-                    ep_tracks = episode_tracks.get(episode['link'], [])
+                    playlists_created = 0
+                    playlists_updated = 0
+                    total_tracks_added = 0
 
-                    for track in ep_tracks:
+                    # Process each episode
+                    for episode in fetched_episodes:
+                        ep_tracks = episode_tracks.get(episode['link'], [])
+                        ep_track_uris = []
+
+                        # Search tracks for this episode
+                        for track in ep_tracks:
+                            uri = spotify.search_track(track)
+                            if uri:
+                                ep_track_uris.append(uri)
+                            else:
+                                state.add_failed_track(track, episode['title'])
+                            progress.update(search_task, advance=1)
+
+                        # Create or update playlist for this episode
+                        if ep_track_uris:
+                            ep_playlist_name = f"{playlist_prefix}{episode['title']}"
+                            ep_playlist_id = spotify.get_playlist_by_name(ep_playlist_name)
+
+                            if ep_playlist_id:
+                                # Update existing playlist
+                                existing_tracks = spotify.get_playlist_tracks(ep_playlist_id)
+                                new_tracks = [uri for uri in ep_track_uris if uri not in existing_tracks]
+
+                                if new_tracks:
+                                    spotify.add_tracks_to_playlist(ep_playlist_id, new_tracks)
+                                    total_tracks_added += len(new_tracks)
+                                    playlists_updated += 1
+                            else:
+                                # Create new playlist
+                                ep_playlist_id = spotify.create_playlist(
+                                    name=ep_playlist_name,
+                                    description=f"Tracks from {episode['title']}"
+                                )
+                                spotify.add_tracks_to_playlist(ep_playlist_id, ep_track_uris)
+                                total_tracks_added += len(ep_track_uris)
+                                playlists_created += 1
+
+                        # Mark episode as processed and save state
+                        state.mark_episode_processed(episode, len(ep_tracks))
+                        state.save()
+
+                    # Retry previously failed tracks (add to appropriate episode playlists if needed)
+                    retry_found = 0
+                    for track in retryable_tracks:
+                        uri = spotify.search_track(track)
+                        if uri:
+                            state.remove_failed_track(track['key'])
+                            retry_found += 1
+                        else:
+                            state.add_failed_track(track, "retry")
+                        progress.update(search_task, advance=1)
+
+                    if retryable_tracks:
+                        state.save()
+
+                    if retry_found > 0:
+                        console.print(f"[green]✓[/green] Found {retry_found} previously failed tracks on Spotify!\n")
+
+                    console.print(f"[green]✓[/green] Created {playlists_created} new playlists")
+                    if playlists_updated > 0:
+                        console.print(f"[green]✓[/green] Updated {playlists_updated} existing playlists")
+                    console.print(f"[green]✓[/green] Added {total_tracks_added} total tracks\n")
+            else:
+                # Combined mode: Create one playlist with all tracks
+                total_tracks_to_search = len(all_tracks) + len(retryable_tracks)
+
+                track_uris = []
+                failed_tracks = []
+
+                if total_tracks_to_search > 0:
+                    search_task = progress.add_task("[cyan]Searching tracks on Spotify...", total=total_tracks_to_search)
+
+                    # Search new tracks from episodes (with incremental state saving)
+                    for episode in fetched_episodes:
+                        ep_tracks = episode_tracks.get(episode['link'], [])
+
+                        for track in ep_tracks:
+                            uri = spotify.search_track(track)
+                            if uri:
+                                track_uris.append(uri)
+                            else:
+                                # Track not found - will be marked as failed
+                                failed_tracks.append(track)
+                                state.add_failed_track(track, episode['title'])
+                            progress.update(search_task, advance=1)
+
+                        # Mark episode as processed and save state incrementally
+                        state.mark_episode_processed(episode, len(ep_tracks))
+                        state.save()
+
+                    # Retry previously failed tracks
+                    retry_found = 0
+                    for track in retryable_tracks:
                         uri = spotify.search_track(track)
                         if uri:
                             track_uris.append(uri)
+                            state.remove_failed_track(track['key'])
+                            retry_found += 1
                         else:
-                            # Track not found - will be marked as failed
-                            failed_tracks.append(track)
-                            state.add_failed_track(track, episode['title'])
+                            # Still not found, increment attempt count
+                            state.add_failed_track(track, "retry")
                         progress.update(search_task, advance=1)
 
-                    # Mark episode as processed and save state incrementally
-                    state.mark_episode_processed(episode, len(ep_tracks))
-                    state.save()
+                    # Save state after processing retries
+                    if retryable_tracks:
+                        state.save()
 
-                # Retry previously failed tracks
-                retry_found = 0
-                for track in retryable_tracks:
-                    uri = spotify.search_track(track)
-                    if uri:
-                        track_uris.append(uri)
-                        state.remove_failed_track(track['key'])
-                        retry_found += 1
+                    if retry_found > 0:
+                        console.print(f"[green]✓[/green] Found {retry_found} previously failed tracks on Spotify!\n")
+
+                    console.print(f"[green]✓[/green] Found {len(track_uris)}/{total_tracks_to_search} tracks on Spotify\n")
+
+                    if failed_tracks:
+                        console.print(f"[yellow]⚠[/yellow] {len(failed_tracks)} tracks not found (will retry on next run)\n")
+
+                # Create or update playlist
+                playlist_id = spotify.get_playlist_by_name(PLAYLIST_NAME)
+
+                if playlist_id:
+                    console.print(f"[cyan]Found existing playlist:[/cyan] {PLAYLIST_NAME}")
+                    # Get existing tracks to avoid duplicates
+                    existing_tracks = spotify.get_playlist_tracks(playlist_id)
+                    new_tracks = [uri for uri in track_uris if uri not in existing_tracks]
+
+                    if new_tracks:
+                        console.print(f"[cyan]Adding {len(new_tracks)} new tracks to playlist...[/cyan]")
+                        num_added = spotify.add_tracks_to_playlist(playlist_id, new_tracks)
+                        console.print(f"[green]✓[/green] Added {num_added} tracks to playlist")
                     else:
-                        # Still not found, increment attempt count
-                        state.add_failed_track(track, "retry")
-                    progress.update(search_task, advance=1)
-
-                # Save state after processing retries
-                if retryable_tracks:
-                    state.save()
-
-                if retry_found > 0:
-                    console.print(f"[green]✓[/green] Found {retry_found} previously failed tracks on Spotify!\n")
-
-                console.print(f"[green]✓[/green] Found {len(track_uris)}/{total_tracks_to_search} tracks on Spotify\n")
-
-                if failed_tracks:
-                    console.print(f"[yellow]⚠[/yellow] {len(failed_tracks)} tracks not found (will retry on next run)\n")
-
-            # Create or update playlist
-            playlist_id = spotify.get_playlist_by_name(PLAYLIST_NAME)
-
-            if playlist_id:
-                console.print(f"[cyan]Found existing playlist:[/cyan] {PLAYLIST_NAME}")
-                # Get existing tracks to avoid duplicates
-                existing_tracks = spotify.get_playlist_tracks(playlist_id)
-                new_tracks = [uri for uri in track_uris if uri not in existing_tracks]
-
-                if new_tracks:
-                    console.print(f"[cyan]Adding {len(new_tracks)} new tracks to playlist...[/cyan]")
-                    num_added = spotify.add_tracks_to_playlist(playlist_id, new_tracks)
-                    console.print(f"[green]✓[/green] Added {num_added} tracks to playlist")
+                        console.print("[yellow]No new tracks to add[/yellow]")
                 else:
-                    console.print("[yellow]No new tracks to add[/yellow]")
-            else:
-                console.print(f"[cyan]Creating new playlist:[/cyan] {PLAYLIST_NAME}")
-                playlist_id = spotify.create_playlist(
-                    name=PLAYLIST_NAME,
-                    description="Tracks from Patreon DJ mixes"
-                )
-                num_added = spotify.add_tracks_to_playlist(playlist_id, track_uris)
-                console.print(f"[green]✓[/green] Created playlist and added {num_added} tracks")
+                    console.print(f"[cyan]Creating new playlist:[/cyan] {PLAYLIST_NAME}")
+                    playlist_id = spotify.create_playlist(
+                        name=PLAYLIST_NAME,
+                        description="Tracks from Patreon DJ mixes"
+                    )
+                    num_added = spotify.add_tracks_to_playlist(playlist_id, track_uris)
+                    console.print(f"[green]✓[/green] Created playlist and added {num_added} tracks")
 
-            # Get playlist URL
-            playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
-            console.print(f"\n[bold green]✓ Done![/bold green] Playlist URL: [link={playlist_url}]{playlist_url}[/link]")
+                # Get playlist URL
+                playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+                console.print(f"\n[bold green]✓ Done![/bold green] Playlist URL: [link={playlist_url}]{playlist_url}[/link]")
 
     console.print("[bold cyan]" + "═" * 60 + "\n")
 

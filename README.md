@@ -99,6 +99,8 @@ The first time you run it, uv will automatically install all dependencies define
 - `--year YYYY`: Filter episodes by specific year (e.g., 2024) - **skips cache by default**
 - `--years`: List all available years from podcast episodes
 - `--use-cache`: Use cache even when filtering by year (e.g., `--year 2024 --use-cache`)
+- `--per-episode`: Create individual playlists for each episode instead of one combined playlist
+- `--playlist-prefix PREFIX`: Prefix for playlist names in per-episode mode (e.g., `"TGL - "`)
 - `--dryrun`: Run in dry run mode (parse episodes and tracks without creating/updating Spotify playlist)
 - `--show-cache`: Display cache statistics and exit
 - `--clean-cache`: Remove failed tracks that exceeded max retry attempts (5)
@@ -142,6 +144,43 @@ uv run patreon_to_spotify.py --year 2024 -n 10
 - Separate playlists are created for each year, making it easy to organize tracks chronologically
 - **By default, `--year` skips the cache** and reprocesses all episodes for that year (useful for rebuilding year-specific playlists)
 - Use `--use-cache` with `--year` if you want incremental updates instead of full reprocessing
+
+### Per-Episode Playlists
+
+Create individual Spotify playlists for each episode:
+
+```bash
+# Create individual playlists for each episode
+uv run patreon_to_spotify.py --per-episode
+
+# Process last 10 episodes as individual playlists
+uv run patreon_to_spotify.py --per-episode -n 10
+
+# Add a prefix to all playlist names for organization
+uv run patreon_to_spotify.py --per-episode --playlist-prefix "TGL - "
+
+# Combine with year filtering
+uv run patreon_to_spotify.py --per-episode --year 2024
+```
+
+**Key features:**
+- Creates one playlist per episode using the episode title as the playlist name
+- Use `--playlist-prefix` to add a prefix (e.g., "TGL - E390: Love Songs" instead of "E390: Love Songs")
+- Playlist names with the same prefix will group together in Spotify
+- Cache automatically tracks which episodes have playlists - only creates playlists for new episodes
+- Perfect for automated weekly runs: just add `--per-episode` to your cron job
+
+**Organizing in Spotify:**
+- The Spotify API doesn't support programmatic folder management
+- All playlists with the same prefix will naturally group together in your library
+- You can manually drag them into a folder in the Spotify app once
+- New playlists will continue to be added (you may need to manually move them to the folder)
+
+**Typical workflow:**
+1. First run: `uv run patreon_to_spotify.py --per-episode --playlist-prefix "TGL - "` creates playlists for all episodes
+2. In Spotify app: Create a folder and manually organize all "TGL - " playlists into it
+3. Weekly automated runs: New episodes automatically get playlists created
+4. Manually move new playlists to the folder as needed
 
 ### Smart Caching & Continuous Updates
 

@@ -4,161 +4,284 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a single-file Python script that extracts tracklists from Patreon podcast RSS feeds and creates Spotify playlists. The script uses `uv` for dependency management with inline PEP 723 script metadata.
+TGL (The Guestlist) is a CLI tool for managing podcast episodes, tracklists, and Spotify playlists from Patreon RSS feeds. Built with Python using `uv` for dependency management (PEP 723 inline script metadata).
 
-## Running the Script
+### Key Dependencies
+- **typer** - CLI framework
+- **rich** - Beautiful terminal output
+- **pydantic-settings** - Type-safe configuration
+- **whoosh** - Full-text search engine (file-based index)
+- **feedparser** - RSS feed parsing
+- **spotipy** - Spotify API client
+- **requests** - HTTP library for RSS fetching
+
+## Quick Start
 
 ```bash
-# Process all episodes (default)
-uv run patreon_to_spotify.py
+# Fetch and cache all episodes from RSS feed
+./tgl.py fetch
 
-# Process only the last N episodes
-uv run patreon_to_spotify.py -n 10
+# List all episodes
+./tgl.py list
 
-# List all available years
-uv run patreon_to_spotify.py --years
+# Show episodes from a specific year
+./tgl.py list --year 2024
 
-# Filter episodes by year (creates "Playlist Name YYYY")
-uv run patreon_to_spotify.py --year 2023
+# Import tracklists to Spotify
+./tgl.py spotify -n 50
 
-# Combine year filter with episode limit
-uv run patreon_to_spotify.py --year 2024 -n 10
+# Dry run (no Spotify changes)
+./tgl.py spotify -n 10 --dryrun
 
-# Dry run mode (no Spotify operations)
-uv run patreon_to_spotify.py -n 5 --dryrun
+# Filter by year
+./tgl.py spotify --year 2024
 ```
-
-**Note:** `uv` automatically installs dependencies from the inline script metadata on first run.
 
 ## Environment Configuration
 
-Required environment variables in `.env`:
-- `PATREON_RSS_URL` - RSS feed URL with auth token (keep private)
-- `SPOTIFY_CLIENT_ID` - From Spotify Developer Dashboard
-- `SPOTIFY_CLIENT_SECRET` - From Spotify Developer Dashboard
-- `SPOTIFY_REDIRECT_URI` - Should be `http://127.0.0.1:8888/callback` (use 127.0.0.1 not localhost - Spotify blocks localhost)
-- `SPOTIFY_PLAYLIST_NAME` - Name for the playlist (optional)
+Environment variables are managed via **pydantic-settings** and support both prefixed and non-prefixed formats for backward compatibility.
 
-Copy `.env.example` to `.env` and fill in your credentials.
+Required variables in `.env`:
+- `TGL_PATREON_RSS_URL` or `PATREON_RSS_URL` - RSS feed URL with auth token (keep private)
+- `TGL_SPOTIFY_CLIENT_ID` or `SPOTIFY_CLIENT_ID` - From Spotify Developer Dashboard
+- `TGL_SPOTIFY_CLIENT_SECRET` or `SPOTIFY_CLIENT_SECRET` - From Spotify Developer Dashboard
+- `TGL_SPOTIFY_REDIRECT_URI` or `SPOTIFY_REDIRECT_URI` - OAuth redirect (default: `http://127.0.0.1:8888/callback`)
+- `TGL_SPOTIFY_PLAYLIST_NAME` or `SPOTIFY_PLAYLIST_NAME` - Playlist name (default: `guestlistr`)
+
+**Note:** Use `127.0.0.1` not `localhost` - Spotify blocks localhost in OAuth settings.
+
+### Variable Name Priority
+
+If both prefixed and non-prefixed versions exist, the `TGL_` prefixed version takes priority. This allows gradual migration without breaking existing setups.
 
 ## Architecture
 
-The script consists of three main classes:
+### Configuration (`tgl.py:47-94`)
+- **Settings class** using `pydantic_settings.BaseSettings`
+- Auto-loads from `.env` file
+- **Backward compatible**: Accepts both `TGL_` prefixed and non-prefixed variable names
+- Type-safe configuration with Field descriptions and `AliasChoices`
+- Global `settings` instance available throughout
 
-### 1. PatreonPodcastFetcher
-- Fetches podcast episodes from RSS feed using `requests` (not direct `feedparser.parse()` to handle SSL properly)
-- Returns list of episodes with title, description, published date, year, and link
-- Parses `published_parsed` from feedparser to extract year
-- Supports limiting to N most recent episodes
-- Can filter episodes by year
-- `get_available_years()` returns sorted list of years with episodes
+### Episode Types & IDs
 
-### 2. TracklistParser
-- Strips HTML tags and unescapes HTML entities from episode descriptions
-- Parses track listings in "Artist - Track" format using regex
-- Filters out headers, URLs, and duplicate tracks
-- Returns list of track dictionaries with artist, track, and search query
+All episodes are now classified into two types with distinct ID formats:
 
-### 3. SpotifyPlaylistManager
-- Handles Spotify authentication via spotipy OAuth
-- Searches for tracks on Spotify
-- Creates or updates playlists
-- Avoids adding duplicate tracks
-- Adds tracks in batches of 100 (Spotify API limit)
+**TGL Episodes** (🎧 cyan):
+- Main "The Guestlist" podcast episodes
+- ID format: `E{number}` (e.g., E390, E174, E212)
+- Episode number extracted from title or inferred from surrounding episodes
+- Always expected to have tracklists
 
-### Main Execution Flow
-1. Parse CLI arguments (argparse)
-2. Fetch episodes from RSS feed with Rich progress bar
-3. Parse tracklists from episode descriptions
-4. **If dryrun:** Show summary and exit
-5. **If not dryrun:** Initialize Spotify, search tracks, create/update playlist
+**OTHER Episodes** (⭐ magenta):
+- Special content: "From The Crates", Fear of Tigers releases, re-ups, interviews, trailers
+- ID format: `X{sequential}` (e.g., X01, X02, X03)
+- Sequential numbering in chronological order
+- May or may not have tracklists
+
+### Pydantic Models
+
+**TrackInfo** (`tgl.py:80-83`):
+```python
+class TrackInfo(BaseModel):
+    artist: str
+    title: str
+```
+
+**Episode** (`tgl.py:86-96`):
+```python
+class Episode(BaseModel):
+    id: int  # Numeric ID (for backward compatibility)
+    title: str  # Clean title (after colon)
+    full_title: str  # Original title from RSS
+    description: str  # Raw HTML description
+    description_text: str  # Cleaned text before tracklist
+    tracklist: Optional[List[TrackInfo]]
+    published: str  # ISO date format
+    year: Optional[int]
+    link: str  # RSS item link (unique identifier)
+    audio_url: Optional[str]
+```
+
+### Core Classes
+
+#### PatreonPodcastFetcher (`tgl.py:165-407`)
+- **Episode Classification** (`classify_episode_type`): Detects TGL vs OTHER based on title patterns
+- **Episode ID Assignment** (`assign_episode_id`): Assigns E-prefix or X-prefix IDs
+- **RSS Parsing** (`fetch_episodes`): Fetches from Patreon RSS, classifies all episodes
+- **Tracklist Parsing** (`_parse_structured_tracklist`): Extracts tracks from descriptions
+
+#### TracklistParser (`tgl.py:412-493`)
+Enhanced parsing with prose detection:
+- Strips HTML, handles entities
+- Parses "Artist - Track" format with `#` or number prefixes
+- **Prose filtering**: Skips lines with common English words (if, the, you, etc.)
+- **Length limits**: Skips lines >120 chars (likely prose)
+- **Special markers**: Handles "RECORD OF THE WEEK:", "FROM THE CRATES:", etc.
+- **Date detection**: Skips date patterns like "31st December - "
+- Removes duplicates, handles "(Original Mix)" suffix
+
+#### SpotifyPlaylistManager (`tgl.py:501-597`)
+- OAuth authentication via spotipy
+- Track search with fuzzy matching
+- Playlist creation/update
+- Batch operations (100 tracks/request limit)
+- Duplicate prevention
+
+#### MetadataCache (`tgl.py:117-161`)
+- Persistent episode metadata in `.tgl_cache.json`
+- Fast lookups by ID or year
+- Pydantic serialization for type safety
+
+#### StateManager (`tgl.py:602-680`)
+Production vs dryrun state files:
+- **Production**: `.guestlistr_state.json`
+- **Dryrun**: `.guestlistr_state_dryrun.json`
+
+Tracks:
+- Processed episodes (prevents re-processing)
+- Failed tracks with retry logic (7-day wait, 5 max attempts)
+- Cumulative statistics
+
+### CLI Commands
+
+**fetch** - Fetch and cache all episode metadata
+```bash
+./tgl.py fetch
+```
+
+**list** - List episodes with optional year filter
+```bash
+./tgl.py list [--year YEAR]
+```
+
+**years** - Show available years with episode counts
+```bash
+./tgl.py years
+```
+
+**show** - Display detailed episode information
+```bash
+./tgl.py show EPISODE_ID
+```
+
+**download** - Download episode audio file
+```bash
+./tgl.py download EPISODE_ID [--output PATH]
+```
+
+**spotify** - Import tracklists to Spotify
+```bash
+./tgl.py spotify [OPTIONS]
+  -n, --episodes INT      Limit to N recent episodes
+  --year INT              Filter by year
+  --dryrun                Preview without Spotify changes
+  --force-refresh         Bypass cache
+  --use-cache             Use cache with year filter
+```
 
 ## Key Implementation Details
 
-### Tracklist Parsing
-The parser expects tracks in format: `# Artist - Track` or `Artist - Track`
-- Removes leading `#` and numbers
-- Skips lines containing tracklist headers or URLs
-- Handles HTML entities (`&amp;` → `&`)
-- Creates unique track keys to avoid duplicates
+### Tracklist Parsing Improvements
 
-### SSL Handling
-Uses `requests.get()` to fetch RSS feed content, then passes to `feedparser.parse()`. This avoids SSL certificate verification errors that occur with direct URL parsing.
+The parser now filters out prose and non-track content:
 
-### Year Filtering
-Episodes can be filtered by year:
-- Uses `published_parsed` from feedparser (time.struct_time) to extract year
-- When `--years` is used, displays Rich table with year and episode count, then exits
-- When `--year YYYY` is specified:
-  - Fetches ALL episodes first (ignores `-n` limit initially)
-  - Filters to episodes from specified year
-  - THEN applies `-n` limit if specified
-  - Appends year to playlist name (e.g., "guestlistr 2023")
-- Separate playlists created per year for easy organization
+1. **Line length check** (>120 chars = likely prose)
+2. **Header detection** ("interview", "mixtape", "poetry corner", "tribute to")
+3. **Prose word detection** (filters lines with "if", "you", "the", "this", "with", etc.)
+4. **Special format handling** ("RECORD OF THE WEEK 2: Artist - Track")
 
-### Rich Progress Bars
-Progress display includes:
-- SpinnerColumn
-- TextColumn (description)
-- BarColumn
-- TaskProgressColumn (percentage)
-- TimeRemainingColumn
+### Episode Number Inference
 
-### Dry Run Mode
-When `--dryrun` is specified:
-- Skips Spotify authentication entirely
-- Shows first 10 parsed tracks
-- Useful for debugging tracklist parsing without API calls
+For TGL episodes without explicit numbers:
+1. Extract numbers from surrounding episodes
+2. Infer based on chronological position
+3. Examples: "Last of the New Fire 2024" → E373, "Lo-Fi Belgrade Trailer" → X01
 
-### Rich Markup in Console Output
-When using Rich console.print() with repeated characters, use string concatenation not multiplication:
-- **Correct:** `console.print("[bold cyan]" + "═" * 60)`
-- **Wrong:** `console.print("[bold cyan]═" * 60)` - prints each character on separate line
+### Rich Terminal Output
 
-## State Management & Caching
+All commands use Rich for beautiful output:
+- Progress bars with spinners
+- Colored tables with clickable links
+- Episode type icons (🎧 for TGL, ⭐ for OTHER)
+- Type-specific colors (cyan for TGL, magenta for OTHER)
 
-### StateManager Class
-Manages persistent state with separate files for production and dryrun modes:
-- **Production mode**: `.guestlistr_state.json` (git-ignored)
-- **Dryrun mode**: `.guestlistr_state_dryrun.json` (git-ignored)
+### Spotify Authentication
 
-State contents:
-- **Processed episodes**: Tracks episode links and metadata to skip on future runs
-- **Failed tracks**: Stores tracks not found on Spotify with retry metadata
-- **Statistics**: Cumulative stats (episodes processed, tracks found, last run time)
+First run opens browser for OAuth. Credentials cached in `.cache` file. Delete `.cache` to re-authorize.
 
-### Caching Behavior
-- By default, already-processed episodes are skipped (unless `--force-refresh` or `--year`)
-- **Year filtering**: `--year` skips cache by default (for full year playlist rebuilds), but can use cache with `--use-cache` flag
-- Failed tracks are automatically retried after 7 days, max 5 attempts
-- When retry succeeds, track is removed from failed list and added to playlist
-- **Incremental state saving**: State is saved after each episode is processed (not at the end), allowing safe cancellation
-- **Dryrun isolation**: `--dryrun` uses separate state file, never saves state, keeping production cache untouched
+**Important:** Redirect URI must be `http://127.0.0.1:8888/callback` (not localhost).
 
-### Failed Track Retry Logic
-1. Track not found → add to `failed_tracks` with attempt count = 1
-2. Next run (7+ days later) → retry search
-3. If found → add to playlist, remove from failed_tracks
-4. If not found → increment attempt_count
-5. After 5 attempts → stop retrying (use `--clean-cache` to remove)
+## Development Notes
 
-### Cache CLI Options
-- `--show-cache`: Display Rich table with cache statistics
-- `--clean-cache`: Remove tracks with 5+ failed attempts
-- `--force-refresh`: Bypass cache, reprocess all episodes
-- `--use-cache`: Force cache usage even with `--year` (e.g., `--year 2024 --use-cache` for incremental updates)
+### Adding Dependencies
 
-### Implementation Note
-Episode tracking uses episode `link` field as unique identifier. The `episode_tracks` dict tracks which tracks came from which episode for proper failure attribution.
+Update the PEP 723 metadata at the top of `tgl.py`:
+```python
+# /// script
+# dependencies = [
+#   "package==version",
+# ]
+# ///
+```
 
-## Debugging Tracklist Parsing
+### Rich Markup
 
-If tracks aren't being extracted:
-1. Use `--dryrun` to see what's being parsed
-2. Check the regex pattern in `TracklistParser.parse_tracklist()`
-3. Common formats supported: `Artist - Track`, `1. Artist - Track`, `# Artist - Track`
-4. Patterns skip lines with: "tracklist", "record of the week", "guestmix", URLs
+When repeating characters:
+- ✅ Correct: `"[bold cyan]" + "═" * 60`
+- ❌ Wrong: `"[bold cyan]═" * 60` (prints each character on new line)
 
-## Spotify Authentication
+### Error Handling
 
-First run opens browser for OAuth authorization. Credentials cached in `.cache` file. If auth issues occur, delete `.cache` and re-authorize.
+All commands use typer.Exit(1) for clean error exits with proper status codes.
+
+### Testing
+
+Unit tests are in `test_tgl.py` and cover:
+- Episode ID parsing (E390, B05, plain numbers)
+- Track parsing logic (including variant extraction)
+- Edge cases from production issues (E340 prose filtering, etc.)
+
+Run tests:
+```bash
+./test_tgl.py
+```
+
+Test coverage includes:
+- **24 test cases** covering ID parsing, track parsing, and model validation
+- Examples from real episodes that had parsing issues
+- Edge cases: HTML entities, special prefixes, prose filtering, duplicate detection
+- Variant extraction: remixes, features, extended mixes
+
+Tests use pytest and include their own PEP 723 dependencies (including all tgl.py dependencies).
+
+## Cache Management
+
+Episode metadata and search index are stored in `.cache/` directory:
+- `.cache/episodes.json` - Episode metadata with timestamp (auto-refreshes after 1 hour)
+- `.cache/search_index/` - Whoosh full-text search index (automatically rebuilt when metadata refreshes)
+
+State files (git-ignored):
+- `.guestlistr_state.json` (production)
+- `.guestlistr_state_dryrun.json` (dryrun mode)
+
+### Search Index
+
+The search functionality uses **Whoosh**, a pure Python full-text search library. The index is stored in `.cache/search_index/` and includes:
+- Episode titles (3x boost)
+- Artist names (5x boost for highest relevance)
+- Track titles (2x boost)
+- Episode descriptions (1x boost)
+
+The index is automatically rebuilt when:
+- Running `./tgl.py refresh` command
+- Metadata cache is refreshed due to staleness (> 1 hour old)
+- Index doesn't exist when searching
+
+Search queries support multiple words without quotes:
+```bash
+./tgl.py search Fabrizio Mammarella  # No quotes needed
+./tgl.py search house music          # Multiple words work naturally
+```
+
+All cache files are git-ignored.

@@ -1,318 +1,268 @@
-# Patreon Podcast to Spotify Playlist
+# Guestlistr
 
-Automatically extract tracklists from Patreon podcast episodes and create a Spotify playlist with all the tracks.
+TGL (The Guestlist) Podcast CLI Tool - Manage episodes, tracklists, and Spotify playlists
 
-## Features
+A comprehensive CLI tool to fetch, parse, search, and manage podcast episodes and their tracklists. Import tracks to Spotify, download episodes, and search through your podcast archive with full-text search.
 
-- Fetches all episodes from a Patreon podcast RSS feed
-- Parses tracklists from episode show notes
-- Searches for tracks on Spotify
-- Creates or updates a Spotify playlist
-- Avoids duplicate tracks
-- Supports multiple tracklist formats
+## ✨ Features
 
-## Prerequisites
+- 📻 **Episode Management**: Fetch and cache podcast episodes from Patreon RSS feed
+- 🎵 **Smart Tracklist Parsing**: Automatically parse tracklists with variant detection (remixes, features, extended mixes)
+- 🔍 **Full-Text Search**: Search across episodes, tracks, and artists using Whoosh
+- 🎧 **Download Episodes**: Save episode audio files locally
+- 🎼 **Spotify Integration**: Import tracklists to Spotify playlists with state management
+- 📊 **Intelligent Filtering**: Filter by year, episode type (TGL/BONUS), and more
+- 💾 **Smart Caching**: Auto-refresh stale data, incremental updates, failed track retry logic
 
-- [uv](https://docs.astral.sh/uv/) - Fast Python package installer
-- A Patreon subscription with access to the podcast RSS feed
-- A Spotify account
-- Spotify API credentials
+## 🚀 Quick Start
 
-## Setup
-
-### 1. Install uv
-
-If you don't have uv installed:
+### Installation
 
 ```bash
-# macOS/Linux
-curl -LsSf https://astral.sh/uv/install.sh | sh
+# Clone and install
+git clone <repo-url>
+cd guestlistr
 
-# Windows
-powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+# Using uv (recommended)
+uv venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+uv pip install -e .
 
-# Or with pip
-pip install uv
+# Or using pip
+pip install -e .
 ```
 
-### 2. Get Patreon RSS Feed URL
+### Configuration
 
-1. Log into your Patreon account
-2. Go to the creator's page
-3. Look for the podcast RSS feed URL (usually found in the podcast settings or by checking your podcast app)
-4. The URL will look like: `https://www.patreon.com/rss/creator-name?auth=your-auth-token`
-
-**Note:** The RSS feed URL includes an authentication token that's specific to your account. Keep it private.
-
-### 3. Set Up Spotify API
-
-1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
-2. Log in with your Spotify account
-3. Click "Create an App"
-4. Fill in the app name and description (e.g., "Patreon to Spotify")
-5. Once created, you'll see your **Client ID** and **Client Secret**
-6. Click "Edit Settings"
-7. Add `http://localhost:8888/callback` to the "Redirect URIs" and save
-
-### 4. Configure Environment Variables
-
-1. Copy the example environment file:
-   ```bash
-   cp .env.example .env
-   ```
-
-2. Edit `.env` and fill in your credentials:
-   ```
-   PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-token
-   SPOTIFY_CLIENT_ID=your_spotify_client_id
-   SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
-   SPOTIFY_REDIRECT_URI=http://localhost:8888/callback
-   SPOTIFY_PLAYLIST_NAME=DJ Patreon Mixes
-   ```
-
-## Usage
-
-Run the script with uv:
+Create a `.env` file:
 
 ```bash
-# Process all episodes (default)
-uv run patreon_to_spotify.py
+# Patreon RSS Feed
+TGL_PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-token
 
-# Process only the last 10 episodes
-uv run patreon_to_spotify.py --episodes 10
+# Spotify API (from https://developer.spotify.com/dashboard)
+TGL_SPOTIFY_CLIENT_ID=your_client_id
+TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
+TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
 
-# Or use the short form
-uv run patreon_to_spotify.py -n 5
-
-# List available years
-uv run patreon_to_spotify.py --years
-
-# Create playlist for a specific year
-uv run patreon_to_spotify.py --year 2023
+# Playlist Name
+TGL_SPOTIFY_PLAYLIST_NAME=guestlistr
 ```
 
-The first time you run it, uv will automatically install all dependencies defined in the script.
+> ⚠️ **Important**: Use `127.0.0.1` not `localhost` for the Spotify redirect URI (Spotify blocks localhost)
 
-### Command Line Options
+## 📖 Usage
 
-- `--episodes N` or `-n N`: Process only the N most recent episodes
-- `--year YYYY`: Filter episodes by specific year (e.g., 2024) - **skips cache by default**
-- `--years`: List all available years from podcast episodes
-- `--episode-num NUM`: Process a specific episode number (e.g., 390 for "E390") - **bypasses cache**
-- `--use-cache`: Use cache even when filtering by year (e.g., `--year 2024 --use-cache`)
-- `--per-episode`: Create individual playlists for each episode instead of one combined playlist
-- `--playlist-prefix PREFIX`: Prefix for playlist names in per-episode mode (e.g., `"TGL - "`)
-- `--dryrun`: Run in dry run mode (parse episodes and tracks without creating/updating Spotify playlist)
-- `--show-cache`: Display cache statistics and exit
-- `--clean-cache`: Remove failed tracks that exceeded max retry attempts (5)
-- `--force-refresh`: Ignore cache and reprocess all episodes
-- `--help` or `-h`: Show help message
-
-### Dry Run Mode
-
-Use `--dryrun` flag for debugging or testing without making changes to Spotify:
+### List Episodes
 
 ```bash
-# Test parsing with the last 5 episodes without creating playlist
-uv run patreon_to_spotify.py -n 5 --dryrun
+# List all episodes
+tgl list
+
+# Filter by year
+tgl list --year 2023
+
+# Show only TGL episodes
+tgl list --tgl
+
+# Show only BONUS episodes
+tgl list --bonus
 ```
 
-In dry run mode, the script will:
-- Fetch and parse episodes
-- Extract tracklists
-- Show a summary of tracks found
-- **Skip** all Spotify operations (no authentication required)
-- Use a separate cache file (`.guestlistr_state_dryrun.json`) that doesn't affect your main cache
-
-### Year Filtering
-
-You can organize your playlists by year:
+### Episode Details
 
 ```bash
-# List all available years with episode counts
-uv run patreon_to_spotify.py --years
+# Show episode details (clickable IDs!)
+tgl info E390
+tgl show B05  # Bonus episode
 
-# Create a playlist for 2023 episodes only
-uv run patreon_to_spotify.py --year 2023
-
-# Get the last 10 episodes from 2024
-uv run patreon_to_spotify.py --year 2024 -n 10
+# Supported ID formats:
+# - Plain: "390"
+# - E prefix: "E390"
+# - B prefix: "B05"
 ```
 
-**Key features:**
-- When using `--year`, the playlist name automatically includes the year (e.g., "guestlistr 2023")
-- The script fetches all episodes, filters by year, then applies the episode limit if specified
-- Separate playlists are created for each year, making it easy to organize tracks chronologically
-- **By default, `--year` skips the cache** and reprocesses all episodes for that year (useful for rebuilding year-specific playlists)
-- Use `--use-cache` with `--year` if you want incremental updates instead of full reprocessing
-
-### Reprocessing a Specific Episode
-
-Reprocess a single episode by its episode number (bypasses cache):
+### Search
 
 ```bash
-# Reprocess episode 390 and add to combined playlist
-uv run patreon_to_spotify.py --episode-num 390
-
-# Reprocess episode 390 and update its individual playlist
-uv run patreon_to_spotify.py --episode-num 390 --per-episode
-
-# Test which tracks would be found without making changes
-uv run patreon_to_spotify.py --episode-num 390 --dryrun
+# Search episodes by title, description, or tracks
+tgl search "house music"
+tgl search LAU
+tgl search "Fabrizio Mammarella"
 ```
 
-**Key features:**
-- Matches episode number in title (e.g., "E390", "e390", "Episode 390")
-- **Automatically bypasses cache** - always reprocesses the episode
-- Useful for fixing episodes where tracks were initially missed
-- Works with both combined and per-episode modes
-- Perfect for retrying when a track becomes available on Spotify later
-
-**Example use cases:**
-- Episode had missing tracks → Spotify just added them → `--episode-num 390`
-- Tracklist in RSS was updated → `--episode-num 390`
-- Want to check what tracks are in a specific episode → `--episode-num 390 --dryrun`
-
-### Per-Episode Playlists
-
-Create individual Spotify playlists for each episode:
+### Download
 
 ```bash
-# Create individual playlists for each episode
-uv run patreon_to_spotify.py --per-episode
-
-# Process last 10 episodes as individual playlists
-uv run patreon_to_spotify.py --per-episode -n 10
-
-# Add a prefix to all playlist names for organization
-uv run patreon_to_spotify.py --per-episode --playlist-prefix "🎧 "
-
-# Combine with year filtering
-uv run patreon_to_spotify.py --per-episode --year 2024
+# Download episode audio
+tgl download E390
 ```
 
-**Playlist naming:**
-- **Without prefix**: Playlist name = episode title exactly as it appears in RSS
-  - Example: "TGL E390: Love Songs and Haunted Nights"
-- **With prefix**: Playlist name = prefix + episode title
-  - `--playlist-prefix "🎧 "` → "🎧 TGL E390: Love Songs and Haunted Nights"
-  - `--playlist-prefix "[Podcast] "` → "[Podcast] TGL E390: Love Songs and Haunted Nights"
-
-**Key features:**
-- Creates one playlist per episode using the episode title as the playlist name
-- **Also adds all tracks to the main combined playlist** (e.g., "guestlistr") - best of both worlds!
-- Use `--playlist-prefix` to add a prefix for visual grouping in Spotify
-- Playlist names with the same prefix will group together in Spotify
-- Cache automatically tracks which episodes have playlists - only creates playlists for new episodes
-- Perfect for automated weekly runs: just add `--per-episode` to your cron job
-
-**Organizing in Spotify:**
-- The Spotify API doesn't support programmatic folder management
-- All playlists with the same prefix will naturally group together in your library
-- You can manually drag them into a folder in the Spotify app once
-- New playlists will continue to be added (you may need to manually move them to the folder)
-
-**What gets created:**
-- **Individual episode playlists**: One per episode (e.g., "TGL E390: Love Songs and Haunted Nights")
-- **Main combined playlist**: All tracks from all episodes (e.g., "guestlistr")
-- Result: You get the convenience of browsing by episode AND a master playlist with everything
-
-**Typical workflow:**
-1. First run: `uv run patreon_to_spotify.py --per-episode --playlist-prefix "🎧 "` creates playlists for all episodes
-2. In Spotify app: Create a folder and manually organize all "🎧 " playlists into it
-3. Weekly automated runs: New episodes automatically get playlists created + main playlist updated
-4. Manually move new episode playlists to the folder as needed
-
-### Smart Caching & Continuous Updates
-
-The script automatically tracks processed episodes and failed tracks, making it perfect for regular weekly updates:
+### Spotify Import
 
 ```bash
-# Run weekly to add new episodes - only processes new content
-uv run patreon_to_spotify.py
+# Import all episodes
+tgl spotify
 
-# Check what's been cached
-uv run patreon_to_spotify.py --show-cache
+# Import last 10 episodes
+tgl spotify -n 10
 
-# Force reprocess everything (ignores cache)
-uv run patreon_to_spotify.py --force-refresh
+# Import specific year
+tgl spotify --year 2023
 
-# Clean up failed tracks that exceeded retry limit
-uv run patreon_to_spotify.py --clean-cache
+# Dry run (no Spotify ops)
+tgl spotify --dryrun
+
+# Force refresh (ignore cache)
+tgl spotify --force-refresh
 ```
 
-**How it works:**
-- **Episode Tracking**: Already-processed episodes are skipped automatically
-- **Failed Track Retry**: Tracks not found on Spotify are retried after 7 days (perfect for newly released tracks!)
-- **Max Attempts**: Each track is retried up to 5 times before being marked as permanently unavailable
-- **State File**: Everything is stored in `.guestlistr_state.json` (automatically created)
-- **Incremental Saving**: State is saved after each episode is processed, so you can safely cancel (Ctrl+C) and resume later
+### Refresh Cache
 
-**Typical workflow:**
-1. First run: Processes all episodes, finds most tracks, records failures
-2. Weekly runs: Only processes new episodes, automatically retries old failures
-3. Result: Continuous playlist enrichment as new episodes release and tracks become available!
+```bash
+# Refresh episode metadata
+tgl refresh
+```
 
-### First Run
+## 🏗️ Project Structure
 
-On the first run, a browser window will open asking you to authorize the app with your Spotify account. After authorizing, you'll be redirected to a localhost URL. The script will automatically capture the authorization and continue.
+```
+guestlistr/
+├── pyproject.toml              # Dependencies & config
+├── README.md
+├── .env.example
+├── src/guestlistr/
+│   ├── __init__.py            # Package exports
+│   ├── cli.py                 # CLI commands
+│   ├── models.py              # Pydantic models
+│   ├── fetcher.py             # RSS & tracklist parser
+│   ├── cache.py               # Metadata cache
+│   ├── search.py              # Whoosh search index
+│   ├── state.py               # State management
+│   └── spotify.py             # Spotify integration
+└── tests/
+    └── test_parser.py         # Unit tests (27 tests)
+```
 
-### What Happens
+## 🎯 Key Features
 
-1. The script fetches all episodes from the Patreon RSS feed
-2. Parses tracklists from each episode's show notes
-3. Searches for each track on Spotify
-4. Creates a new playlist (or updates existing one) with all found tracks
-5. Prints a summary and playlist URL
+### Smart Tracklist Parsing
 
-### Subsequent Runs
+- **Multiple Formats**: `# Artist - Track`, `1. Artist - Track`, `Artist - Track`
+- **Variant Detection**: Remixes, features, extended mixes
+- **Special Prefixes**: `RECORD OF THE WEEK`, `FROM THE BLOGS`, `TRACK OF THE WEEK`
+- **Prose Filtering**: Automatically excludes descriptive text
+- **Smart Detection**: Distinguishes artist names from prose using capitalization
 
-Run the script again anytime to fetch new episodes and add new tracks to your playlist. The script will:
-- Only add tracks that aren't already in the playlist
-- Preserve existing tracks
-- Add newly found tracks from new episodes
+**Example parsed tracks:**
+- `Prospa - Love Songs (feat. Kosmo Kint)` → Artist: "Prospa", Title: "Love Songs", Variant: "feat. Kosmo Kint"
+- `Tuba Rex - The Magnetic Empire (Pianopoli Remix)` → Variant: "Pianopoli Remix"
 
-## Troubleshooting
+### Episode Types
 
-### "No tracks found"
+- **TGL Episodes** (E prefix): E1, E390, etc.
+- **BONUS Episodes** (B prefix): B01, B05, etc.
 
-The tracklist parser supports common formats like:
-- `Artist - Track`
-- `1. Artist - Track`
-- `Artist: Track`
+### Intelligent Caching
 
-If tracks aren't being found, check the show notes format and adjust the regex patterns in `TracklistParser` class if needed.
+- **Auto-refresh**: Cache expires after 1 hour
+- **Search Index**: Whoosh full-text index for fast searches
+- **State Management**: Tracks processed episodes and failed tracks
+- **Retry Logic**: Failed tracks retried after 7 days (max 5 attempts)
+- **Incremental Saves**: State saved after each episode
+
+**Cache files:**
+- `.cache/episodes.json` - Episode metadata
+- `.cache/search_index/` - Whoosh search index
+- `.guestlistr_state.json` - Spotify processing state
+
+### Search Capabilities
+
+Full-text search powered by Whoosh:
+- Search episode titles (3x boost)
+- Search track artists (5x boost)
+- Search track titles (2x boost)
+- Search episode descriptions
+
+Results show:
+- Relevance score
+- Episode type (TGL/BONUS)
+- Clickable episode IDs
+- Match context (which field matched)
+
+## 🧪 Development
+
+### Running Tests
+
+```bash
+# All tests
+pytest tests/
+
+# With coverage
+pytest tests/ --cov=guestlistr
+
+# Verbose
+pytest tests/ -v
+```
+
+### Test Coverage
+
+27 unit tests covering:
+- Episode ID parsing (E390, B05, plain numbers)
+- Tracklist parsing with variants
+- Edge cases from production (E340, E64, E75, E61)
+- Prose filtering
+- HTML entity handling
+- Special prefixes
+
+### Tech Stack
+
+- **Pydantic** - Data validation & settings
+- **Rich** - Beautiful terminal output
+- **Typer** - CLI framework
+- **Whoosh** - Full-text search
+- **Spotipy** - Spotify API
+- **feedparser** - RSS parsing
+- **pytest** - Testing
+
+## 📝 Migration from Script
+
+The project was migrated from a single-file uv script (`tgl.py`) to a proper Python package:
+
+**Benefits:**
+- ✅ Centralized dependencies in `pyproject.toml`
+- ✅ Modular code organization
+- ✅ Proper testing infrastructure
+- ✅ Installable as a package (`pip install -e .`)
+- ✅ Entry point CLI command (`tgl`)
+
+**Old way:** `uv run tgl.py list`
+**New way:** `tgl list`
+
+## 🐛 Troubleshooting
+
+### "No episodes found"
+- Check `.env` file exists and has correct `TGL_PATREON_RSS_URL`
+- Run `tgl refresh` to rebuild cache
 
 ### "Track not found on Spotify"
-
-Some tracks might not be available on Spotify or the search might not find them due to:
-- Different spelling or naming
-- Track not available in your region
-- Remixes/edits that aren't on Spotify
-
-The script will continue and add the tracks it can find.
+- Some tracks may not be available on Spotify
+- Different spelling/naming
+- Regional restrictions
+- The tool will retry failed tracks after 7 days
 
 ### Authentication Issues
+- Delete `.cache` file
+- Run `tgl spotify` again to re-authorize
 
-If you get Spotify authentication errors:
-1. Delete the `.cache` file in the project directory
-2. Run the script again
-3. Re-authorize when prompted
+### Import Errors
+- Make sure you've installed the package: `uv pip install -e .`
+- Activate virtual environment: `source .venv/bin/activate`
 
-## Customization
-
-### Playlist Name
-
-Change the `SPOTIFY_PLAYLIST_NAME` in your `.env` file.
-
-### Tracklist Parsing
-
-Edit the `TracklistParser` class in `patreon_to_spotify.py` to add custom regex patterns for your specific tracklist format.
-
-### Search Accuracy
-
-Modify the `search_track` method in `SpotifyPlaylistManager` to adjust the search query or increase the number of results to check.
-
-## License
+## 📄 License
 
 MIT
+
+---
+
+**Made with ❤️ for podcast and music lovers**

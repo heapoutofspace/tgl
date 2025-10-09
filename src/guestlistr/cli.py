@@ -1,0 +1,660 @@
+"""TGL CLI entry point and commands"""
+
+import typer
+from typing import Optional, Annotated, List, Dict
+from pathlib import Path
+from collections import defaultdict
+import os
+import re
+from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
+from rich.table import Table
+from rich.text import Text
+import requests
+
+from guestlistr import (
+    Settings,
+    MetadataCache,
+    SearchIndex,
+    PatreonPodcastFetcher,
+    StateManager,
+    SpotifyPlaylistManager,
+    parse_episode_id,
+    Track,
+)
+
+# Initialize console and app
+console = Console()
+app = typer.Typer(
+    help="TGL (The Guestlist) Podcast CLI Tool",
+    no_args_is_help=False,
+    invoke_without_command=True
+)
+
+# Global settings instance
+settings = Settings()
+
+@app.callback()
+def main(ctx: typer.Context):
+    """TGL (The Guestlist) Podcast CLI Tool"""
+    if ctx.invoked_subcommand is None:
+        # No command provided, show custom help
+        console.print("\n[bold cyan]" + "═" * 70)
+        console.print("[bold cyan]TGL - The Guestlist Podcast CLI Tool")
+        console.print("[bold cyan]" + "═" * 70 + "\n")
+
+        console.print("[bold]Available Commands:[/bold]\n")
+
+        console.print("  [cyan]list[/cyan]                 List all episodes")
+        console.print("  [cyan]info[/cyan]                 Show details for a specific episode")
+        console.print("  [cyan]search[/cyan]               Search episodes by title, description, or tracks")
+        console.print("  [cyan]download[/cyan]             Download an episode audio file")
+        console.print("  [cyan]spotify[/cyan]              Import tracklists to Spotify playlist")
+        console.print("  [cyan]refresh[/cyan]              Refresh episode metadata from RSS feed\n")
+
+        console.print("[bold]Examples:[/bold]\n")
+        console.print("  [dim]# List all episodes[/dim]")
+        console.print("  [green]tgl.py list[/green]\n")
+
+        console.print("  [dim]# List only TGL episodes from 2023[/dim]")
+        console.print("  [green]tgl.py list --year 2023 --tgl[/green]\n")
+
+        console.print("  [dim]# List only BONUS episodes[/dim]")
+        console.print("  [green]tgl.py list --bonus[/green]\n")
+
+        console.print("  [dim]# Show details for episode 390[/dim]")
+        console.print("  [green]tgl.py info E390[/green]\n")
+
+        console.print("  [dim]# Show details for bonus episode 5[/dim]")
+        console.print("  [green]tgl.py info B05[/green]\n")
+
+        console.print("  [dim]# Search for episodes about house music[/dim]")
+        console.print("  [green]tgl.py search \"house music\"[/green]\n")
+
+        console.print("  [dim]# Search for episodes with tracks by LAU[/dim]")
+        console.print("  [green]tgl.py search LAU[/green]\n")
+
+        console.print("  [dim]# Refresh the episode cache[/dim]")
+        console.print("  [green]tgl.py refresh[/green]\n")
+
+        console.print("[dim]For detailed help on any command, use:[/dim]")
+        console.print("  [green]tgl.py [command] --help[/green]\n")
+
+@app.command()
+def refresh():
+    """Refresh episode metadata cache from RSS feed"""
+    console.print("\n[bold cyan]" + "═" * 60)
+    console.print("[bold cyan]Refreshing Episode Metadata")
+    console.print("[bold cyan]" + "═" * 60 + "\n")
+
+    cache = MetadataCache()
+    fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        console=console,
+    ) as progress:
+        task = progress.add_task("[cyan]Fetching episodes from RSS feed...", total=None)
+        episodes = fetcher.fetch_episodes()
+        progress.update(task, completed=True, total=1)
+
+    console.print(f"[green]✓[/green] Fetched {len(episodes)} episodes\n")
+
+    # Update cache
+    for episode in episodes:
+        cache.add_episode(episode)
+
+    cache.save()
+
+    # Build search index
+    console.print("[cyan]Building search index...[/cyan]")
+    search_index = SearchIndex(cache.cache_dir)
+    search_index.build_index(cache.episodes)
+    console.print(f"[green]✓[/green] Search index built\n")
+
+    console.print(f"[bold green]✓ Done![/bold green] Cached {len(episodes)} episodes")
+    console.print("[bold cyan]" + "═" * 60 + "\n")
+
+
+@app.command()
+def list(
+    year: Optional[int] = typer.Option(None, "--year", help="Filter by year"),
+    tgl: bool = typer.Option(False, "--tgl", help="Show only TGL episodes"),
+    bonus: bool = typer.Option(False, "--bonus", help="Show only BONUS episodes")
+):
+    """List all episodes"""
+    cache = MetadataCache()
+
+    # Auto-refresh if cache is stale or empty
+    if cache.should_auto_refresh():
+        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+        cache.refresh(fetcher)
+
+    if not cache.episodes:
+        console.print("[red]Error: Could not load episodes[/red]")
+        raise typer.Exit(1)
+
+    episodes = cache.get_episodes_by_year(year) if year else cache.get_all_episodes()
+
+    # Apply type filters
+    if tgl and not bonus:
+        episodes = [ep for ep in episodes if ep.episode_type == 'TGL']
+    elif bonus and not tgl:
+        episodes = [ep for ep in episodes if ep.episode_type == 'BONUS']
+    # If both or neither, show all
+
+    if not episodes:
+        console.print(f"[yellow]No episodes found[/yellow]")
+        raise typer.Exit(1)
+
+    # Show overview
+    console.print()
+    if year:
+        # When filtering by year, just show total
+        tgl_count = sum(1 for ep in episodes if ep.episode_type == 'TGL')
+        bonus_count = sum(1 for ep in episodes if ep.episode_type == 'BONUS')
+        console.print(f"[bold cyan]{year}:[/bold cyan] {len(episodes)} episodes total ([cyan]🎧 {tgl_count}[/cyan], [magenta]🎁 {bonus_count}[/magenta])")
+    else:
+        # Show breakdown by year
+        from collections import defaultdict
+        year_stats = defaultdict(lambda: {'TGL': 0, 'BONUS': 0})
+
+        for episode in episodes:
+            year_stats[episode.year][episode.episode_type] += 1
+
+        overview_table = Table(show_header=True, header_style="bold cyan", box=None)
+        overview_table.add_column("Year", style="cyan", justify="center")
+        overview_table.add_column("🎧 TGL", style="cyan", justify="right")
+        overview_table.add_column("🎁 BONUS", style="magenta", justify="right")
+        overview_table.add_column("Total", style="green", justify="right")
+
+        total_tgl = 0
+        total_bonus = 0
+
+        for yr in sorted(year_stats.keys(), reverse=True):
+            tgl = year_stats[yr]['TGL']
+            bonus = year_stats[yr]['BONUS']
+            total = tgl + bonus
+            total_tgl += tgl
+            total_bonus += bonus
+            overview_table.add_row(str(yr), str(tgl), str(bonus), str(total))
+
+        # Add totals row
+        overview_table.add_row(
+            "[bold]Total[/bold]",
+            f"[bold]{total_tgl}[/bold]",
+            f"[bold]{total_bonus}[/bold]",
+            f"[bold]{total_tgl + total_bonus}[/bold]"
+        )
+
+        console.print(overview_table)
+    console.print()
+
+    table = Table(title=f"TGL Episodes{f' ({year})' if year else ''}", show_header=True, header_style="bold cyan")
+    table.add_column("Type", justify="center", width=4)
+    table.add_column("ID", style="green", justify="right", width=6)
+    table.add_column("Title", style="white", no_wrap=False, overflow="fold")
+    table.add_column("Tracks", style="dim", justify="center", width=6)
+    table.add_column("Date", style="yellow", width=12)
+
+    for episode in episodes:
+        # Create clickable episode ID
+        clickable_id = Text(episode.episode_id)
+        clickable_id.stylize(f"link {episode.link}")
+
+        # Get episode type icon
+        type_icon = "🎧" if episode.episode_type == "TGL" else "🎁"
+
+        # Get track count
+        track_count = str(len(episode.tracklist)) if episode.tracklist else "-"
+
+        table.add_row(type_icon, clickable_id, episode.title, track_count, episode.published)
+
+    console.print(table)
+    console.print(f"\n[dim]Total: {len(episodes)} episodes[/dim]")
+    console.print(f"[dim]💡 Tip: Click on episode IDs to open in browser[/dim]\n")
+
+
+def parse_episode_id(episode_id_str: str) -> int:
+    """Parse episode ID string to internal numeric ID
+
+    Accepts:
+    - Plain numbers: "390" -> 390 (TGL episode)
+    - E prefix: "E390" -> 390 (TGL episode)
+    - B prefix: "B05" -> 10005 (BONUS episode, 10000 + 5)
+    """
+    episode_id_str = episode_id_str.strip().upper()
+
+    if episode_id_str.startswith('E'):
+        # TGL episode
+        try:
+            return int(episode_id_str[1:])
+        except ValueError:
+            raise ValueError(f"Invalid episode ID format: {episode_id_str}")
+    elif episode_id_str.startswith('B'):
+        # BONUS episode
+        try:
+            b_number = int(episode_id_str[1:])
+            return 10000 + b_number
+        except ValueError:
+            raise ValueError(f"Invalid episode ID format: {episode_id_str}")
+    else:
+        # Plain number, assume TGL episode
+        try:
+            return int(episode_id_str)
+        except ValueError:
+            raise ValueError(f"Invalid episode ID format: {episode_id_str}")
+
+
+@app.command(name="info")
+@app.command(name="show")
+def info(episode_id: str):
+    """Show details for a specific episode"""
+    cache = MetadataCache()
+
+    # Auto-refresh if cache is stale or empty
+    if cache.should_auto_refresh():
+        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+        cache.refresh(fetcher)
+
+    if not cache.episodes:
+        console.print("[red]Error: Could not load episodes[/red]")
+        raise typer.Exit(1)
+
+    # Parse episode ID
+    try:
+        numeric_id = parse_episode_id(episode_id)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    episode = cache.get_episode(numeric_id)
+
+    if not episode:
+        console.print(f"[red]Episode {episode_id} not found[/red]")
+        raise typer.Exit(1)
+
+    # Display episode info with clickable ID
+    clickable_id = f"[link={episode.link}]{episode.episode_id}[/link]"
+    console.print(f"\n[bold cyan]{clickable_id}:[/bold cyan] [bold white]{episode.title}[/bold white]")
+    console.print(f"[dim]Published: {episode.published}[/dim]")
+
+    # Display description text
+    if episode.description_text:
+        console.print(f"\n[bold]Description:[/bold]")
+        # Limit to first 500 chars to keep it concise
+        desc = episode.description_text
+        if len(desc) > 500:
+            desc = desc[:500] + "..."
+        console.print(f"[dim]{desc}[/dim]")
+
+    # Display structured tracklist
+    if episode.tracklist:
+        console.print(f"\n[bold]Tracklist ({len(episode.tracklist)} tracks):[/bold]")
+        for i, track in enumerate(episode.tracklist, 1):
+            track_display = f"  {i:3d}. {track.artist} - {track.title}"
+            if track.variant:
+                track_display += f" [dim]({track.variant})[/dim]"
+            console.print(track_display)
+    else:
+        console.print("\n[yellow]No tracklist found[/yellow]")
+
+    console.print()
+
+
+@app.command()
+def search(
+    query: List[str] = typer.Argument(..., help="Search query (multiple words allowed)")
+):
+    """Search episodes by title, description, or tracks
+
+    You can search with multiple words without quotes:
+    tgl.py search Fabrizio Mammarella
+    """
+    if not query:
+        console.print("[red]Error: Please provide a search query[/red]")
+        raise typer.Exit(1)
+
+    # Join query words into a single string
+    search_query = ' '.join(query)
+
+    cache = MetadataCache()
+
+    # Auto-refresh if cache is stale or empty
+    if cache.should_auto_refresh():
+        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+        cache.refresh(fetcher)
+
+    if not cache.episodes:
+        console.print("[red]Error: Could not load episodes[/red]")
+        raise typer.Exit(1)
+
+    # Load search index
+    search_index = SearchIndex(cache.cache_dir)
+
+    # Check if index is empty and rebuild if needed
+    with search_index.ix.searcher() as searcher:
+        if searcher.doc_count_all() == 0:
+            console.print("[cyan]Building search index...[/cyan]")
+            search_index.build_index(cache.episodes)
+            console.print("[green]✓[/green] Search index built")
+
+    # Perform search
+    results = search_index.search(search_query, cache.episodes)
+
+    if not results:
+        console.print(f"[yellow]No episodes found matching '{search_query}'[/yellow]")
+        return
+
+    console.print(f"\n[bold cyan]Search Results for '{search_query}'[/bold cyan]")
+    console.print(f"[dim]Found {len(results)} matches[/dim]\n")
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Relevance", justify="right", width=8)
+    table.add_column("Type", justify="center", width=4)
+    table.add_column("ID", style="green", justify="right", width=6)
+    table.add_column("Title", style="white")
+    table.add_column("Match Context", style="dim")
+
+    for result in results[:20]:  # Limit to top 20 results
+        episode = result['episode']
+        score = result['score']
+        context = result['context']
+
+        # Create clickable episode ID
+        clickable_id = Text(episode.episode_id)
+        clickable_id.stylize(f"link {episode.link}")
+
+        # Get episode type icon
+        type_icon = "🎧" if episode.episode_type == "TGL" else "🎁"
+
+        # Format score as percentage (cap at 100%)
+        relevance = f"{min(score * 100, 100):.0f}%"
+
+        table.add_row(relevance, type_icon, clickable_id, episode.title, context[:60])
+
+    console.print(table)
+    console.print(f"\n[dim]Showing top {min(len(results), 20)} results[/dim]\n")
+
+
+@app.command()
+def download(episode_id: str):
+    """Download an episode audio file"""
+    cache = MetadataCache()
+
+    # Auto-refresh if cache is stale or empty
+    if cache.should_auto_refresh():
+        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+        cache.refresh(fetcher)
+
+    if not cache.episodes:
+        console.print("[red]Error: Could not load episodes[/red]")
+        raise typer.Exit(1)
+
+    # Parse episode ID
+    try:
+        numeric_id = parse_episode_id(episode_id)
+    except ValueError as e:
+        console.print(f"[red]{e}[/red]")
+        raise typer.Exit(1)
+
+    episode = cache.get_episode(numeric_id)
+
+    if not episode:
+        console.print(f"[red]Episode {episode_id} not found[/red]")
+        raise typer.Exit(1)
+
+    if not episode.audio_url:
+        console.print(f"[red]No audio URL found for episode {episode_id}[/red]")
+        raise typer.Exit(1)
+
+    # Create episodes directory
+    episodes_dir = Path("episodes")
+    episodes_dir.mkdir(exist_ok=True)
+
+    # Create filename
+    filename = f"TGL #{episode.id} - {episode.title}.mp3"
+    # Clean filename
+    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+    filepath = episodes_dir / filename
+
+    if filepath.exists():
+        console.print(f"[yellow]File already exists: {filepath}[/yellow]")
+        if not typer.confirm("Overwrite?"):
+            raise typer.Exit(0)
+
+    console.print(f"\n[cyan]Downloading: {episode.full_title}[/cyan]")
+    console.print(f"[dim]Saving to: {filepath}[/dim]\n")
+
+    try:
+        response = requests.get(episode.audio_url, stream=True, timeout=30)
+        response.raise_for_status()
+
+        total_size = int(response.headers.get('content-length', 0))
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("[cyan]Downloading...", total=total_size)
+
+            with open(filepath, 'wb') as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    f.write(chunk)
+                    progress.update(task, advance=len(chunk))
+
+        console.print(f"\n[bold green]✓ Downloaded successfully![/bold green]")
+        console.print(f"[dim]Saved to: {filepath}[/dim]\n")
+
+    except requests.exceptions.RequestException as e:
+        console.print(f"\n[red]Error downloading episode: {e}[/red]")
+        if filepath.exists():
+            filepath.unlink()
+        raise typer.Exit(1)
+
+
+@app.command()
+def spotify(
+    episodes_limit: Optional[int] = typer.Option(None, "-n", "--episodes", help="Number of recent episodes to process"),
+    year: Optional[int] = typer.Option(None, "--year", help="Filter episodes by year"),
+    dryrun: bool = typer.Option(False, "--dryrun", help="Dry run mode (no Spotify operations)"),
+    force_refresh: bool = typer.Option(False, "--force-refresh", help="Bypass cache, reprocess all episodes"),
+    use_cache: bool = typer.Option(False, "--use-cache", help="Use cache even when filtering by year"),
+):
+    """Import episode tracklists to Spotify playlist"""
+    console.print("\n[bold cyan]" + "═" * 60)
+    console.print("[bold cyan]TGL to Spotify Playlist")
+    if dryrun:
+        console.print("[bold yellow]🔍 DRY RUN MODE[/bold yellow]")
+    console.print("[bold cyan]" + "═" * 60 + "\n")
+
+    # Add year to playlist name if filtering
+    PLAYLIST_NAME = f"{settings.spotify_playlist_name} {year}" if year else settings.spotify_playlist_name
+
+    # Load cached metadata with auto-refresh
+    cache = MetadataCache()
+
+    # Auto-refresh if cache is stale or empty
+    if cache.should_auto_refresh():
+        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+        cache.refresh(fetcher)
+
+    if not cache.episodes:
+        console.print("[red]Error: Could not load episodes[/red]")
+        raise typer.Exit(1)
+
+    # Use separate state file for dryrun mode
+    state_file = ".guestlistr_state_dryrun.json" if dryrun else ".guestlistr_state.json"
+    state = StateManager(state_file)
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+
+        # Get episodes from cache
+        fetch_task = progress.add_task("[cyan]Loading episodes from cache...", total=None)
+
+        if year:
+            fetched_episodes = cache.get_episodes_by_year(year)
+            if episodes_limit:
+                fetched_episodes = fetched_episodes[:episodes_limit]
+        else:
+            # Get all episodes sorted by ID descending (newest first)
+            fetched_episodes = sorted(cache.episodes.values(), key=lambda e: e.id, reverse=True)
+            if episodes_limit:
+                fetched_episodes = fetched_episodes[:episodes_limit]
+
+        progress.update(fetch_task, completed=True, total=1)
+
+        if not fetched_episodes:
+            console.print("[red]No episodes found![/red]")
+            raise typer.Exit(1)
+
+        console.print(f"[green]✓[/green] Loaded {len(fetched_episodes)} episodes\n")
+
+        # Filter out already-processed episodes
+        should_use_cache = not force_refresh and (not year or use_cache)
+
+        if should_use_cache:
+            new_episodes = [ep for ep in fetched_episodes if not state.is_episode_processed(ep.link)]
+            cached_count = len(fetched_episodes) - len(new_episodes)
+
+            if cached_count > 0:
+                console.print(f"[cyan]ℹ[/cyan] Skipping {cached_count} already-processed episodes\n")
+
+            fetched_episodes = new_episodes
+
+        if not fetched_episodes:
+            console.print("[yellow]No new episodes to process[/yellow]\n")
+            return
+
+        console.print(f"[cyan]Processing {len(fetched_episodes)} episodes...[/cyan]\n")
+
+        # Get tracklists from cached episodes
+        all_tracks = []
+        episode_tracks = {}
+
+        parse_task = progress.add_task("[cyan]Loading tracklists...", total=len(fetched_episodes))
+
+        for episode in fetched_episodes:
+            # Use cached tracklist
+            tracks = episode.tracklist if episode.tracklist else []
+            # Convert Track objects to dict format expected by the rest of the code
+            track_dicts = [Track(artist=t.artist, track=t.title, query=f"{t.artist} {t.title}") for t in tracks]
+            all_tracks.extend(track_dicts)
+            episode_tracks[episode.link] = track_dicts
+            progress.update(parse_task, advance=1)
+
+        console.print(f"[green]✓[/green] Loaded {len(all_tracks)} tracks from {len(fetched_episodes)} episodes\n")
+
+        if dryrun:
+            # Dry run mode
+            console.print("[yellow]⚠ Dry run mode - skipping Spotify operations[/yellow]\n")
+            console.print(f"[cyan]Summary:[/cyan]")
+            console.print(f"  • Episodes processed: {len(fetched_episodes)}")
+            console.print(f"  • Total tracks extracted: {len(all_tracks)}")
+            console.print(f"\n[dim]Tracks found:[/dim]")
+            for i, track in enumerate(all_tracks[:10], 1):
+                console.print(f"  {i}. {track.artist} - {track.track}")
+            if len(all_tracks) > 10:
+                console.print(f"  ... and {len(all_tracks) - 10} more")
+        else:
+            # Initialize Spotify
+            console.print("[cyan]Initializing Spotify connection...[/cyan]")
+            spotify_manager = SpotifyPlaylistManager()
+            console.print("[green]✓[/green] Connected to Spotify\n")
+
+            # Get retryable failed tracks
+            retryable_tracks = state.get_retryable_failed_tracks()
+
+            if retryable_tracks:
+                console.print(f"[cyan]ℹ[/cyan] Found {len(retryable_tracks)} previously failed tracks to retry\n")
+
+            total_tracks_to_search = len(all_tracks) + len(retryable_tracks)
+            track_uris = []
+
+            if total_tracks_to_search > 0:
+                search_task = progress.add_task("[cyan]Searching tracks on Spotify...", total=total_tracks_to_search)
+
+                # Search new tracks
+                for episode in fetched_episodes:
+                    ep_tracks = episode_tracks.get(episode.link, [])
+
+                    for track in ep_tracks:
+                        uri = spotify_manager.search_track(track)
+                        if uri:
+                            track_uris.append(uri)
+                        else:
+                            state.add_failed_track(track, episode.full_title)
+                        progress.update(search_task, advance=1)
+
+                    # Mark episode as processed and save
+                    state.mark_episode_processed(episode, len(ep_tracks))
+                    state.save()
+
+                # Retry failed tracks
+                retry_found = 0
+                for track_info in retryable_tracks:
+                    track = Track(artist=track_info['artist'], track=track_info['track'], query=track_info['query'])
+                    uri = spotify_manager.search_track(track)
+                    if uri:
+                        track_uris.append(uri)
+                        state.remove_failed_track(track_info['key'])
+                        retry_found += 1
+                    else:
+                        state.add_failed_track(track, "retry")
+                    progress.update(search_task, advance=1)
+
+                if retryable_tracks:
+                    state.save()
+
+                if retry_found > 0:
+                    console.print(f"[green]✓[/green] Found {retry_found} previously failed tracks!\n")
+
+                console.print(f"[green]✓[/green] Found {len(track_uris)}/{total_tracks_to_search} tracks on Spotify\n")
+
+            # Create or update playlist
+            playlist_id = spotify_manager.get_playlist_by_name(PLAYLIST_NAME)
+
+            if playlist_id:
+                console.print(f"[cyan]Found existing playlist:[/cyan] {PLAYLIST_NAME}")
+                existing_tracks = spotify_manager.get_playlist_tracks(playlist_id)
+                new_tracks = [uri for uri in track_uris if uri not in existing_tracks]
+
+                if new_tracks:
+                    console.print(f"[cyan]Adding {len(new_tracks)} new tracks...[/cyan]")
+                    num_added = spotify_manager.add_tracks_to_playlist(playlist_id, new_tracks)
+                    console.print(f"[green]✓[/green] Added {num_added} tracks to playlist")
+                else:
+                    console.print("[yellow]No new tracks to add[/yellow]")
+            else:
+                console.print(f"[cyan]Creating new playlist:[/cyan] {PLAYLIST_NAME}")
+                playlist_id = spotify_manager.create_playlist(
+                    name=PLAYLIST_NAME,
+                    description="Tracks from TGL (The Guestlist) podcast"
+                )
+                num_added = spotify_manager.add_tracks_to_playlist(playlist_id, track_uris)
+                console.print(f"[green]✓[/green] Created playlist and added {num_added} tracks")
+
+            playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+            console.print(f"\n[bold green]✓ Done![/bold green] Playlist URL: [link={playlist_url}]{playlist_url}[/link]")
+
+    console.print("[bold cyan]" + "═" * 60 + "\n")
+
+
+def main():
+    """Main CLI entry point"""
+    app()
+
+
+if __name__ == "__main__":
+    main()

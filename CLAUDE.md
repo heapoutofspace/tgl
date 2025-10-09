@@ -36,7 +36,7 @@ Required environment variables in `.env`:
 - `PATREON_RSS_URL` - RSS feed URL with auth token (keep private)
 - `SPOTIFY_CLIENT_ID` - From Spotify Developer Dashboard
 - `SPOTIFY_CLIENT_SECRET` - From Spotify Developer Dashboard
-- `SPOTIFY_REDIRECT_URI` - Should be `http://localhost:8888/callback`
+- `SPOTIFY_REDIRECT_URI` - Should be `http://127.0.0.1:8888/callback` (use 127.0.0.1 not localhost - Spotify blocks localhost)
 - `SPOTIFY_PLAYLIST_NAME` - Name for the playlist (optional)
 
 Copy `.env.example` to `.env` and fill in your credentials.

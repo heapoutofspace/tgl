@@ -181,7 +181,7 @@ class SpotifyPlaylistManager:
         self.sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
             client_id=os.getenv('SPOTIFY_CLIENT_ID'),
             client_secret=os.getenv('SPOTIFY_CLIENT_SECRET'),
-            redirect_uri=os.getenv('SPOTIFY_REDIRECT_URI', 'http://localhost:8888/callback'),
+            redirect_uri=os.getenv('SPOTIFY_REDIRECT_URI', 'http://127.0.0.1:8888/callback'),
             scope=scope
         ))
         self.user_id = self.sp.current_user()['id']

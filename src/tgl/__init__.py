@@ -6,6 +6,7 @@ from .search import SearchIndex
 from .fetcher import PatreonPodcastFetcher
 from .state import StateManager
 from .spotify import SpotifyPlaylistManager
+from .paths import paths, TGLPaths
 
 __version__ = "0.1.0"
 
@@ -20,4 +21,6 @@ __all__ = [
     "PatreonPodcastFetcher",
     "StateManager",
     "SpotifyPlaylistManager",
+    "paths",
+    "TGLPaths",
 ]

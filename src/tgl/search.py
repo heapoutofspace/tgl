@@ -1,23 +1,25 @@
 """Search index manager using Whoosh"""
 
 import shutil
-from typing import Dict, List
+from typing import Dict, List, Optional
 from pathlib import Path
 from whoosh import index
 from whoosh.fields import Schema, ID, TEXT, STORED
 from whoosh.qparser import MultifieldParser, OrGroup
 
 from .models import Episode
+from .paths import paths
 
 
 class SearchIndex:
     """Manages a Whoosh-based search index for episodes"""
 
-    def __init__(self, cache_dir: Path = Path(".cache")):
-        self.cache_dir = cache_dir
-        self.index_dir = cache_dir / "search_index"
-        self.cache_dir.mkdir(exist_ok=True)
-        self.index_dir.mkdir(exist_ok=True)
+    def __init__(self, cache_dir: Optional[Path] = None):
+        # Use platform-specific data directory by default
+        self.cache_dir = cache_dir if cache_dir else paths.data_dir
+        self.index_dir = paths.search_index_dir
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self.index_dir.mkdir(parents=True, exist_ok=True)
 
         # Define schema for episode search
         self.schema = Schema(

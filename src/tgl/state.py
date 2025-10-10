@@ -2,11 +2,13 @@
 
 import os
 import json
-from typing import Dict, List
+from typing import Dict, List, Optional
+from pathlib import Path
 from datetime import datetime
 from rich.console import Console
 
 from .models import Episode, Track
+from .paths import paths
 
 console = Console()
 
@@ -14,13 +16,14 @@ console = Console()
 class StateManager:
     """Manages persistent state for episode processing and failed track retries"""
 
-    def __init__(self, state_file: str = ".guestlistr_state.json"):
-        self.state_file = state_file
+    def __init__(self, state_file: Optional[Path] = None):
+        # Use platform-specific state file by default
+        self.state_file = state_file if state_file else paths.state_file
         self.state = self._load_state()
 
     def _load_state(self) -> Dict:
         """Load state from file or return empty state"""
-        if os.path.exists(self.state_file):
+        if Path(self.state_file).exists():
             try:
                 with open(self.state_file, 'r') as f:
                     return json.load(f)

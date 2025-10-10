@@ -5,8 +5,8 @@ Run with: pytest tests/
 """
 
 import pytest
-from guestlistr import TrackInfo, parse_episode_id
-from guestlistr.fetcher import PatreonPodcastFetcher
+from tgl import TrackInfo, parse_episode_id
+from tgl.fetcher import PatreonPodcastFetcher
 
 
 class TestEpisodeIDParsing:

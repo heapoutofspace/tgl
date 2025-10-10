@@ -6,13 +6,16 @@ from pathlib import Path
 from collections import defaultdict
 import os
 import re
+import subprocess
+import tomllib
+import tomli_w
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
 import requests
 
-from guestlistr import (
+from tgl import (
     Settings,
     MetadataCache,
     SearchIndex,
@@ -21,6 +24,7 @@ from guestlistr import (
     SpotifyPlaylistManager,
     parse_episode_id,
     Track,
+    paths,
 )
 
 # Initialize console and app
@@ -50,7 +54,8 @@ def main(ctx: typer.Context):
         console.print("  [cyan]search[/cyan]               Search episodes by title, description, or tracks")
         console.print("  [cyan]download[/cyan]             Download an episode audio file")
         console.print("  [cyan]spotify[/cyan]              Import tracklists to Spotify playlist")
-        console.print("  [cyan]refresh[/cyan]              Refresh episode metadata from RSS feed\n")
+        console.print("  [cyan]refresh[/cyan]              Refresh episode metadata from RSS feed")
+        console.print("  [cyan]config[/cyan]               Manage TGL configuration\n")
 
         console.print("[bold]Examples:[/bold]\n")
         console.print("  [dim]# List all episodes[/dim]")
@@ -488,7 +493,7 @@ def spotify(
         raise typer.Exit(1)
 
     # Use separate state file for dryrun mode
-    state_file = ".guestlistr_state_dryrun.json" if dryrun else ".guestlistr_state.json"
+    state_file = paths.state_file_dryrun if dryrun else paths.state_file
     state = StateManager(state_file)
 
     with Progress(
@@ -649,6 +654,311 @@ def spotify(
             console.print(f"\n[bold green]✓ Done![/bold green] Playlist URL: [link={playlist_url}]{playlist_url}[/link]")
 
     console.print("[bold cyan]" + "═" * 60 + "\n")
+
+
+# Config command group
+config_app = typer.Typer(help="Manage TGL configuration")
+app.add_typer(config_app, name="config")
+
+
+@config_app.command("show")
+def config_show():
+    """Show current configuration settings"""
+    console.print("\n[bold cyan]" + "═" * 60)
+    console.print("[bold cyan]TGL Configuration")
+    console.print("[bold cyan]" + "═" * 60 + "\n")
+
+    # Show current settings
+    console.print("[bold]Current Settings:[/bold]\n")
+
+    table = Table(show_header=True, header_style="bold cyan", box=None)
+    table.add_column("Setting", style="cyan")
+    table.add_column("Value", style="white")
+    table.add_column("Source", style="dim")
+
+    # Determine source for each setting
+    config_exists = paths.config_file.exists()
+    env_file_exists = Path(".env").exists()
+
+    # Load config file if it exists
+    config_data = {}
+    if config_exists:
+        with open(paths.config_file, 'rb') as f:
+            config_data = tomllib.load(f)
+
+    # Load .env file if it exists (before Settings loads it)
+    dotenv_data = {}
+    if env_file_exists:
+        try:
+            with open(".env", 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith('#') and '=' in line:
+                        key_part, value_part = line.split('=', 1)
+                        dotenv_data[key_part.strip()] = value_part.strip()
+        except:
+            pass
+
+    # Check each setting
+    settings_info = [
+        ("patreon_rss_url", settings.patreon_rss_url),
+        ("spotify_client_id", settings.spotify_client_id),
+        ("spotify_client_secret", "***" if settings.spotify_client_secret else ""),
+        ("spotify_redirect_uri", settings.spotify_redirect_uri),
+        ("spotify_playlist_name", settings.spotify_playlist_name),
+    ]
+
+    for key, value in settings_info:
+        # Determine source (check in priority order)
+        env_key = key.upper()
+        tgl_env_key = f"TGL_{env_key}"
+
+        source = "default"
+
+        # Check actual environment (not from .env)
+        # We need to check if it was set BEFORE Settings loaded .env
+        # The easiest way is to check if it's in dotenv_data - if not there, it must be from real env
+        if tgl_env_key in os.environ:
+            # Check if it's from .env or real environment
+            if tgl_env_key not in dotenv_data:
+                source = "environment"
+            elif key in config_data:
+                # Both .env and config have it, .env wins (lower priority in our sources order)
+                # Actually wait, env_settings comes before dotenv_settings, so real env > config > .env
+                source = ".env file"
+            else:
+                source = ".env file"
+        elif env_key in os.environ:
+            # Check if it's from .env or real environment
+            if env_key not in dotenv_data:
+                source = "environment"
+            elif key in config_data:
+                source = ".env file"
+            else:
+                source = ".env file"
+        elif key in config_data:
+            source = "config file"
+        elif env_key in dotenv_data or tgl_env_key in dotenv_data:
+            source = ".env file"
+
+        # Mask sensitive values
+        display_value = value
+        if "secret" in key.lower() or "url" in key.lower():
+            if value:
+                display_value = value[:20] + "..." if len(value) > 20 else value
+
+        table.add_row(key, display_value, source)
+
+    console.print(table)
+    console.print()
+
+    # Show file locations
+    console.print("[bold]Configuration Files:[/bold]\n")
+    locations = Table(show_header=True, header_style="bold cyan", box=None)
+    locations.add_column("Type", style="cyan")
+    locations.add_column("Location", style="white")
+    locations.add_column("Status", style="dim")
+
+    locations.add_row(
+        "Config File",
+        str(paths.config_file),
+        "[green]exists[/green]" if config_exists else "[dim]not found[/dim]"
+    )
+    locations.add_row(
+        "Data Directory",
+        str(paths.data_dir),
+        "[green]exists[/green]"
+    )
+    locations.add_row(
+        ".env File",
+        str(Path(".env").absolute()),
+        "[green]exists[/green]" if env_file_exists else "[dim]not found[/dim]"
+    )
+
+    console.print(locations)
+    console.print()
+
+
+@config_app.command("set")
+def config_set(
+    key: str = typer.Argument(..., help="Configuration key to set"),
+    value: str = typer.Argument(..., help="Value to set")
+):
+    """Set a configuration value in the config file"""
+    # Valid keys
+    valid_keys = [
+        "patreon_rss_url",
+        "spotify_client_id",
+        "spotify_client_secret",
+        "spotify_redirect_uri",
+        "spotify_playlist_name",
+    ]
+
+    if key not in valid_keys:
+        console.print(f"[red]Error: Invalid configuration key '{key}'[/red]")
+        console.print(f"[yellow]Valid keys:[/yellow] {', '.join(valid_keys)}")
+        raise typer.Exit(1)
+
+    # Load existing config or create new one
+    config_data = {}
+    if paths.config_file.exists():
+        with open(paths.config_file, 'rb') as f:
+            config_data = tomllib.load(f)
+
+    # Update value
+    config_data[key] = value
+
+    # Write back
+    with open(paths.config_file, 'wb') as f:
+        tomli_w.dump(config_data, f)
+
+    console.print(f"\n[green]✓[/green] Set [cyan]{key}[/cyan] in config file")
+    console.print(f"[dim]Config file: {paths.config_file}[/dim]\n")
+
+
+@config_app.command("unset")
+def config_unset(
+    key: str = typer.Argument(..., help="Configuration key to unset")
+):
+    """Remove a configuration value from the config file"""
+    if not paths.config_file.exists():
+        console.print("[yellow]Config file does not exist[/yellow]")
+        raise typer.Exit(0)
+
+    # Load existing config
+    with open(paths.config_file, 'rb') as f:
+        config_data = tomllib.load(f)
+
+    if key not in config_data:
+        console.print(f"[yellow]Key '{key}' not found in config file[/yellow]")
+        raise typer.Exit(0)
+
+    # Remove key
+    del config_data[key]
+
+    # Write back
+    with open(paths.config_file, 'wb') as f:
+        tomli_w.dump(config_data, f)
+
+    console.print(f"\n[green]✓[/green] Removed [cyan]{key}[/cyan] from config file")
+    console.print(f"[dim]Config file: {paths.config_file}[/dim]\n")
+
+
+@config_app.command("edit")
+def config_edit():
+    """Open configuration file in default editor"""
+    # Create config file if it doesn't exist
+    if not paths.config_file.exists():
+        console.print("[cyan]Creating new config file...[/cyan]")
+        # Create with example content
+        example_config = {
+            "# Remove the '#' prefix and update values below": None,
+            "# patreon_rss_url": "https://www.patreon.com/rss/...",
+            "# spotify_client_id": "your_client_id",
+            "# spotify_client_secret": "your_client_secret",
+            "# spotify_redirect_uri": "http://127.0.0.1:8888/callback",
+            "# spotify_playlist_name": "TGL",
+        }
+        # Write a basic template
+        with open(paths.config_file, 'w') as f:
+            f.write("# TGL Configuration File\n")
+            f.write("# Uncomment and set values below\n\n")
+            f.write("# patreon_rss_url = \"https://www.patreon.com/rss/...\"\n")
+            f.write("# spotify_client_id = \"your_client_id\"\n")
+            f.write("# spotify_client_secret = \"your_client_secret\"\n")
+            f.write("# spotify_redirect_uri = \"http://127.0.0.1:8888/callback\"\n")
+            f.write("# spotify_playlist_name = \"TGL\"\n")
+
+    console.print(f"[cyan]Opening config file in editor...[/cyan]")
+    console.print(f"[dim]{paths.config_file}[/dim]\n")
+
+    # Determine editor
+    editor = os.environ.get('EDITOR', 'nano')
+
+    try:
+        subprocess.run([editor, str(paths.config_file)], check=True)
+        console.print("\n[green]✓[/green] Config file saved")
+    except subprocess.CalledProcessError:
+        console.print("\n[red]Error: Editor exited with error[/red]")
+        raise typer.Exit(1)
+    except FileNotFoundError:
+        console.print(f"\n[red]Error: Editor '{editor}' not found[/red]")
+        console.print(f"[yellow]Set EDITOR environment variable or edit manually:[/yellow]")
+        console.print(f"[dim]{paths.config_file}[/dim]")
+        raise typer.Exit(1)
+
+
+@config_app.command("path")
+def config_path(
+    show_all: bool = typer.Option(False, "--all", help="Show all paths")
+):
+    """Show configuration file path"""
+    if show_all:
+        console.print("\n[bold cyan]TGL Directory Paths[/bold cyan]\n")
+
+        table = Table(show_header=True, header_style="bold cyan", box=None)
+        table.add_column("Path Type", style="cyan")
+        table.add_column("Location", style="white")
+
+        table.add_row("Config Directory", str(paths.config_dir))
+        table.add_row("Config File", str(paths.config_file))
+        table.add_row("Data Directory", str(paths.data_dir))
+        table.add_row("Episodes Cache", str(paths.episodes_cache))
+        table.add_row("Search Index", str(paths.search_index_dir))
+        table.add_row("State File", str(paths.state_file))
+        table.add_row("State File (Dryrun)", str(paths.state_file_dryrun))
+        table.add_row("Spotify Cache", str(paths.spotify_cache))
+
+        console.print(table)
+        console.print()
+    else:
+        console.print(str(paths.config_file))
+
+
+@config_app.command("init")
+def config_init():
+    """Initialize a new configuration file with prompts"""
+    console.print("\n[bold cyan]" + "═" * 60)
+    console.print("[bold cyan]Initialize TGL Configuration")
+    console.print("[bold cyan]" + "═" * 60 + "\n")
+
+    if paths.config_file.exists():
+        console.print("[yellow]Config file already exists.[/yellow]")
+        if not typer.confirm("Overwrite existing config?"):
+            raise typer.Exit(0)
+
+    console.print("[dim]Enter configuration values (press Enter to skip):[/dim]\n")
+
+    config_data = {}
+
+    # Patreon RSS URL
+    patreon_url = typer.prompt("Patreon RSS URL", default="", show_default=False)
+    if patreon_url:
+        config_data["patreon_rss_url"] = patreon_url
+
+    # Spotify settings
+    spotify_id = typer.prompt("Spotify Client ID", default="", show_default=False)
+    if spotify_id:
+        config_data["spotify_client_id"] = spotify_id
+
+    spotify_secret = typer.prompt("Spotify Client Secret", default="", show_default=False, hide_input=True)
+    if spotify_secret:
+        config_data["spotify_client_secret"] = spotify_secret
+
+    spotify_uri = typer.prompt("Spotify Redirect URI", default="http://127.0.0.1:8888/callback")
+    if spotify_uri:
+        config_data["spotify_redirect_uri"] = spotify_uri
+
+    playlist_name = typer.prompt("Spotify Playlist Name", default="TGL")
+    if playlist_name:
+        config_data["spotify_playlist_name"] = playlist_name
+
+    # Write config file
+    with open(paths.config_file, 'wb') as f:
+        tomli_w.dump(config_data, f)
+
+    console.print(f"\n[green]✓[/green] Configuration saved to:")
+    console.print(f"[cyan]{paths.config_file}[/cyan]\n")
 
 
 def main():

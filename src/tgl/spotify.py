@@ -5,6 +5,7 @@ import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
 from .models import Settings, Track
+from .paths import paths
 
 
 class SpotifyPlaylistManager:
@@ -16,7 +17,8 @@ class SpotifyPlaylistManager:
             client_id=settings.spotify_client_id,
             client_secret=settings.spotify_client_secret,
             redirect_uri=settings.spotify_redirect_uri,
-            scope=scope
+            scope=scope,
+            cache_path=str(paths.spotify_cache)
         ))
         self.user_id = self.sp.current_user()['id']
 

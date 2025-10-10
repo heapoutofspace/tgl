@@ -34,7 +34,57 @@ pip install -e .
 
 ### Configuration
 
-Create a `.env` file:
+TGL supports multiple configuration methods (in priority order):
+
+1. **Environment variables** (highest priority)
+2. **Config file** (platform-specific location)
+3. **`.env` file** (project directory)
+4. **Default values** (lowest priority)
+
+#### Interactive Setup
+
+```bash
+# Initialize config file with prompts
+tgl config init
+```
+
+#### Manual Configuration
+
+**Option 1: Config file (recommended)**
+
+```bash
+# Show config file location
+tgl config path
+
+# Edit config file
+tgl config edit
+
+# Set individual values
+tgl config set spotify_client_id your_client_id
+tgl config set spotify_client_secret your_secret
+
+# Show current config
+tgl config show
+```
+
+Config file locations:
+- **macOS**: `~/Library/Application Support/TGL/config.toml`
+- **Linux**: `~/.config/TGL/config.toml`
+- **Windows**: `C:\Users\<user>\AppData\Local\TGL\config.toml`
+
+**Option 2: Environment variables**
+
+```bash
+export TGL_PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-token
+export TGL_SPOTIFY_CLIENT_ID=your_client_id
+export TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
+export TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
+export TGL_SPOTIFY_PLAYLIST_NAME=TGL
+```
+
+**Option 3: .env file**
+
+Create a `.env` file in the project directory:
 
 ```bash
 # Patreon RSS Feed
@@ -46,7 +96,7 @@ TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
 TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
 
 # Playlist Name
-TGL_SPOTIFY_PLAYLIST_NAME=guestlistr
+TGL_SPOTIFY_PLAYLIST_NAME=TGL
 ```
 
 > ⚠️ **Important**: Use `127.0.0.1` not `localhost` for the Spotify redirect URI (Spotify blocks localhost)
@@ -124,6 +174,31 @@ tgl spotify --force-refresh
 tgl refresh
 ```
 
+### Configuration Management
+
+```bash
+# Initialize config with prompts
+tgl config init
+
+# Show current configuration
+tgl config show
+
+# Set a value
+tgl config set spotify_playlist_name "My Playlist"
+
+# Remove a value
+tgl config unset spotify_playlist_name
+
+# Edit config file in default editor
+tgl config edit
+
+# Show config file path
+tgl config path
+
+# Show all paths (data, cache, state)
+tgl config path --all
+```
+
 ## 🏗️ Project Structure
 
 ```
@@ -131,10 +206,11 @@ guestlistr/
 ├── pyproject.toml              # Dependencies & config
 ├── README.md
 ├── .env.example
-├── src/guestlistr/
+├── src/tgl/
 │   ├── __init__.py            # Package exports
-│   ├── cli.py                 # CLI commands
-│   ├── models.py              # Pydantic models
+│   ├── cli.py                 # CLI commands & config management
+│   ├── models.py              # Pydantic models & settings
+│   ├── paths.py               # Platform-specific paths
 │   ├── fetcher.py             # RSS & tracklist parser
 │   ├── cache.py               # Metadata cache
 │   ├── search.py              # Whoosh search index
@@ -170,11 +246,22 @@ guestlistr/
 - **State Management**: Tracks processed episodes and failed tracks
 - **Retry Logic**: Failed tracks retried after 7 days (max 5 attempts)
 - **Incremental Saves**: State saved after each episode
+- **Platform-specific**: Uses OS-appropriate directories via platformdirs
 
-**Cache files:**
-- `.cache/episodes.json` - Episode metadata
-- `.cache/search_index/` - Whoosh search index
-- `.guestlistr_state.json` - Spotify processing state
+**Data files** (stored in platform-specific directories):
+
+Show all paths with: `tgl config path --all`
+
+- **macOS**: `~/Library/Application Support/TGL/`
+- **Linux**: `~/.local/share/TGL/`
+- **Windows**: `C:\Users\<user>\AppData\Local\TGL\`
+
+Files stored:
+- `episodes.json` - Episode metadata cache
+- `search_index/` - Whoosh full-text search index
+- `state.json` - Spotify processing state (production)
+- `state_dryrun.json` - Dryrun state
+- `.spotify_cache` - Spotify OAuth tokens
 
 ### Search Capabilities
 
@@ -199,7 +286,7 @@ Results show:
 pytest tests/
 
 # With coverage
-pytest tests/ --cov=guestlistr
+pytest tests/ --cov=tgl
 
 # Verbose
 pytest tests/ -v
@@ -223,6 +310,8 @@ pytest tests/ -v
 - **Whoosh** - Full-text search
 - **Spotipy** - Spotify API
 - **feedparser** - RSS parsing
+- **platformdirs** - Platform-specific directories
+- **tomli-w** - TOML config file writing
 - **pytest** - Testing
 
 ## 📝 Migration from Script
@@ -252,7 +341,7 @@ The project was migrated from a single-file uv script (`tgl.py`) to a proper Pyt
 - The tool will retry failed tracks after 7 days
 
 ### Authentication Issues
-- Delete `.cache` file
+- Delete Spotify cache file (see path with `tgl config path --all`)
 - Run `tgl spotify` again to re-authorize
 
 ### Import Errors

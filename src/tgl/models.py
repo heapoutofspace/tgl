@@ -1,13 +1,21 @@
 """Pydantic models for TGL application"""
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
+from pathlib import Path
 from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource, TomlConfigSettingsSource
 from pydantic import AliasChoices
 
 
 class Settings(BaseSettings):
-    """Application settings loaded from environment variables
+    """Application settings loaded from environment variables and config file
+
+    Priority order (highest to lowest):
+    1. Environment variables (TGL_ prefixed versions)
+    2. Environment variables (non-prefixed versions)
+    3. TOML config file (platform-specific location)
+    4. .env file (project directory)
+    5. Default values
 
     Accepts both TGL_ prefixed and non-prefixed variable names for backward compatibility.
     Prefixed versions take priority if both exist.
@@ -15,8 +23,40 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',
-        extra='ignore'
+        extra='ignore',
+        toml_file=None,  # Will be set dynamically
     )
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> Tuple[PydanticBaseSettingsSource, ...]:
+        """Customize settings sources to add TOML config file support
+
+        Priority (highest to lowest):
+        1. Init settings (constructor arguments)
+        2. Environment variables
+        3. TOML config file
+        4. .env file
+        5. File secrets
+        """
+        # Import here to avoid circular dependency
+        from .paths import paths
+
+        toml_settings = None
+        if paths.config_file.exists():
+            toml_settings = TomlConfigSettingsSource(settings_cls, paths.config_file)
+
+        # Return sources in priority order
+        if toml_settings:
+            return (init_settings, env_settings, toml_settings, dotenv_settings, file_secret_settings)
+        else:
+            return (init_settings, env_settings, dotenv_settings, file_secret_settings)
 
     # Patreon RSS feed URL
     # Accepts: TGL_PATREON_RSS_URL or PATREON_RSS_URL
@@ -50,7 +90,7 @@ class Settings(BaseSettings):
 
     # Accepts: TGL_SPOTIFY_PLAYLIST_NAME or SPOTIFY_PLAYLIST_NAME
     spotify_playlist_name: str = Field(
-        default='guestlistr',
+        default='TGL',
         validation_alias=AliasChoices('TGL_SPOTIFY_PLAYLIST_NAME', 'SPOTIFY_PLAYLIST_NAME'),
         description="Default Spotify playlist name"
     )

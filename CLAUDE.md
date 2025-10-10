@@ -46,7 +46,7 @@ Required variables in `.env`:
 - `TGL_SPOTIFY_CLIENT_ID` or `SPOTIFY_CLIENT_ID` - From Spotify Developer Dashboard
 - `TGL_SPOTIFY_CLIENT_SECRET` or `SPOTIFY_CLIENT_SECRET` - From Spotify Developer Dashboard
 - `TGL_SPOTIFY_REDIRECT_URI` or `SPOTIFY_REDIRECT_URI` - OAuth redirect (default: `http://127.0.0.1:8888/callback`)
-- `TGL_SPOTIFY_PLAYLIST_NAME` or `SPOTIFY_PLAYLIST_NAME` - Playlist name (default: `guestlistr`)
+- `TGL_SPOTIFY_PLAYLIST_NAME` or `SPOTIFY_PLAYLIST_NAME` - Playlist name (default: `TGL`)
 
 **Note:** Use `127.0.0.1` not `localhost` - Spotify blocks localhost in OAuth settings.
 

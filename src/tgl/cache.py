@@ -7,6 +7,7 @@ from datetime import datetime
 from rich.console import Console
 
 from .models import Episode
+from .paths import paths
 
 if TYPE_CHECKING:
     from .fetcher import PatreonPodcastFetcher
@@ -16,14 +17,15 @@ console = Console()
 
 
 class MetadataCache:
-    """Manages episode metadata cache in .cache/ folder with auto-refresh"""
+    """Manages episode metadata cache with auto-refresh"""
 
     CACHE_MAX_AGE_HOURS = 1  # Auto-refresh if cache is older than this
 
-    def __init__(self, cache_dir: Path = Path(".cache")):
-        self.cache_dir = cache_dir
-        self.metadata_file = cache_dir / "episodes.json"
-        self.cache_dir.mkdir(exist_ok=True)
+    def __init__(self, cache_dir: Optional[Path] = None):
+        # Use platform-specific data directory by default
+        self.cache_dir = cache_dir if cache_dir else paths.data_dir
+        self.metadata_file = paths.episodes_cache
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.episodes: Dict[int, Episode] = {}
         self.last_updated: Optional[datetime] = None
         self._load()

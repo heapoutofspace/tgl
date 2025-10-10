@@ -1,5 +1,6 @@
 """Platform-specific directory paths for TGL application"""
 
+import os
 from pathlib import Path
 from platformdirs import user_data_dir, user_config_dir
 
@@ -11,6 +12,8 @@ class TGLPaths:
     - macOS: ~/Library/Application Support/TGL
     - Linux: ~/.local/share/TGL and ~/.config/TGL
     - Windows: C:\\Users\\<user>\\AppData\\Local\\TGL
+
+    Data directory can be overridden with TGL_DATA_DIR environment variable.
     """
 
     # Application name for platformdirs
@@ -18,15 +21,58 @@ class TGLPaths:
     APP_AUTHOR = "TGL"
 
     def __init__(self):
-        # Data directory (persistent data, cache, state)
-        self._data_dir = Path(user_data_dir(self.APP_NAME, self.APP_AUTHOR))
+        # Check for data directory override (env var or .env file)
+        # Must check before Settings loads to avoid circular dependency
+        data_dir_override = self._get_data_dir_override()
 
-        # Config directory (configuration files)
+        # Data directory (persistent data, cache, state)
+        if data_dir_override:
+            self._data_dir = Path(data_dir_override).expanduser().resolve()
+        else:
+            self._data_dir = Path(user_data_dir(self.APP_NAME, self.APP_AUTHOR))
+
+        # Config directory (configuration files) - never overridable
         self._config_dir = Path(user_config_dir(self.APP_NAME, self.APP_AUTHOR))
 
         # Create directories if they don't exist
         self._data_dir.mkdir(parents=True, exist_ok=True)
         self._config_dir.mkdir(parents=True, exist_ok=True)
+
+    def _get_data_dir_override(self) -> str | None:
+        """Get data directory override from environment variables or .env file
+
+        Checks in order:
+        1. TGL_DATA_DIR environment variable
+        2. DATA_DIR environment variable
+        3. TGL_DATA_DIR in .env file
+        4. DATA_DIR in .env file
+        """
+        # Check environment variables first (highest priority)
+        if 'TGL_DATA_DIR' in os.environ:
+            return os.environ['TGL_DATA_DIR']
+        if 'DATA_DIR' in os.environ:
+            return os.environ['DATA_DIR']
+
+        # Check .env file if it exists (lower priority)
+        env_file = Path('.env')
+        if env_file.exists():
+            try:
+                with open(env_file, 'r') as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith('#'):
+                            if '=' in line:
+                                key, value = line.split('=', 1)
+                                key = key.strip()
+                                value = value.strip().strip('"').strip("'")
+                                if key == 'TGL_DATA_DIR':
+                                    return value
+                                elif key == 'DATA_DIR':
+                                    return value
+            except Exception:
+                pass
+
+        return None
 
     @property
     def data_dir(self) -> Path:

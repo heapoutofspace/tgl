@@ -95,6 +95,15 @@ class Settings(BaseSettings):
         description="Default Spotify playlist name"
     )
 
+    # Data directory override (environment variable only, not config file)
+    # Note: This must be set via environment variable or .env file before app starts
+    # It cannot be set in config file since paths are initialized before config loads
+    data_dir: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices('TGL_DATA_DIR', 'DATA_DIR'),
+        description="Override data directory location (env var only)"
+    )
+
 
 class TrackInfo(BaseModel):
     """Track information model"""

@@ -97,9 +97,26 @@ TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
 
 # Playlist Name
 TGL_SPOTIFY_PLAYLIST_NAME=TGL
+
+# Optional: Override data directory location
+# TGL_DATA_DIR=/custom/path/to/data
 ```
 
 > ⚠️ **Important**: Use `127.0.0.1` not `localhost` for the Spotify redirect URI (Spotify blocks localhost)
+
+#### Custom Data Directory
+
+You can override the data directory location using the `TGL_DATA_DIR` environment variable:
+
+```bash
+# Via environment variable
+export TGL_DATA_DIR=/path/to/custom/data
+
+# Or in .env file
+echo "TGL_DATA_DIR=/path/to/custom/data" >> .env
+```
+
+**Note**: The config file location cannot be overridden and always uses platform-specific directories.
 
 ## 📖 Usage
 

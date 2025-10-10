@@ -706,6 +706,7 @@ def config_show():
         ("spotify_client_secret", "***" if settings.spotify_client_secret else ""),
         ("spotify_redirect_uri", settings.spotify_redirect_uri),
         ("spotify_playlist_name", settings.spotify_playlist_name),
+        ("data_dir", str(paths.data_dir) if settings.data_dir else "default"),
     ]
 
     for key, value in settings_info:
@@ -785,7 +786,7 @@ def config_set(
     value: str = typer.Argument(..., help="Value to set")
 ):
     """Set a configuration value in the config file"""
-    # Valid keys
+    # Valid keys (data_dir excluded - must be set via environment variable)
     valid_keys = [
         "patreon_rss_url",
         "spotify_client_id",
@@ -797,6 +798,8 @@ def config_set(
     if key not in valid_keys:
         console.print(f"[red]Error: Invalid configuration key '{key}'[/red]")
         console.print(f"[yellow]Valid keys:[/yellow] {', '.join(valid_keys)}")
+        if key == "data_dir":
+            console.print(f"[yellow]Note:[/yellow] data_dir must be set via environment variable (TGL_DATA_DIR) or .env file")
         raise typer.Exit(1)
 
     # Load existing config or create new one

@@ -481,6 +481,7 @@ def download(episode_id: str):
 def spotify(
     episodes: Optional[List[str]] = typer.Option(None, "--episode", help="Create playlist for specific episode (can be used multiple times)"),
     years: Optional[List[int]] = typer.Option(None, "--year", help="Create playlist for all tracks from a year (can be used multiple times)"),
+    all_years: bool = typer.Option(False, "--years", help="Create playlists for all years with episodes"),
     all_tracks: bool = typer.Option(False, "--all", help="Create playlist with ALL tracks from all episodes"),
     sync: bool = typer.Option(False, "--sync", help="Update all playlists currently tracked in state"),
     dry_run: bool = typer.Option(False, "-n", "--dry-run", help="Dry run mode (no write operations)"),
@@ -494,6 +495,10 @@ def spotify(
       tgl spotify --episode E390 --year 2024 --all
 
     This will create/update all three playlists in sequence.
+
+    Use --years to create playlists for all years:
+
+      tgl spotify --years
 
     Use --sync to update all playlists currently tracked in state:
 
@@ -509,9 +514,15 @@ def spotify(
         console.print("[dim]Or run: [cyan]tgl config init[/cyan] to reconfigure everything[/dim]\n")
         raise typer.Exit(1)
 
+    # Validate that --years and --year are mutually exclusive
+    if all_years and years:
+        console.print("\n[red]Error: --years cannot be used with --year[/red]\n")
+        console.print("[dim]Use --years to create playlists for all years, or --year to specify individual years[/dim]\n")
+        raise typer.Exit(1)
+
     # Validate that --sync is mutually exclusive with other playlist options
-    if sync and (episodes or years or all_tracks):
-        console.print("\n[red]Error: --sync cannot be used with --episode, --year, or --all[/red]\n")
+    if sync and (episodes or years or all_years or all_tracks):
+        console.print("\n[red]Error: --sync cannot be used with --episode, --year, --years, or --all[/red]\n")
         console.print("[dim]Use --sync alone to update all tracked playlists, or specify individual playlists without --sync[/dim]\n")
         raise typer.Exit(1)
 
@@ -520,12 +531,13 @@ def spotify(
     spotify_manager = SpotifyManager(settings, dry_run=dry_run, verbose=verbose)
 
     # If no options provided, just run authorization
-    if not episodes and not years and not all_tracks and not sync:
+    if not episodes and not years and not all_years and not all_tracks and not sync:
         if spotify_manager.authorize():
             console.print("[green]✓ Spotify authorization successful[/green]")
             console.print("[dim]You can now use Spotify commands like:[/dim]")
             console.print("[dim]  [cyan]tgl spotify --episode E390[/cyan][/dim]")
             console.print("[dim]  [cyan]tgl spotify --year 2024[/cyan][/dim]")
+            console.print("[dim]  [cyan]tgl spotify --years[/cyan] (all years)[/dim]")
             console.print("[dim]  [cyan]tgl spotify --all[/cyan][/dim]")
             console.print("[dim]  [cyan]tgl spotify --sync[/cyan] (update all tracked playlists)[/dim]\n")
         raise typer.Exit(0)
@@ -545,6 +557,16 @@ def spotify(
 
     # Track overall success
     all_success = True
+
+    # Handle --years: expand to all available years
+    if all_years:
+        available_years = cache.get_available_years()
+        if not available_years:
+            console.print("\n[yellow]No years with episodes found[/yellow]\n")
+            raise typer.Exit(0)
+
+        console.print(f"\n[bold cyan]Creating playlists for {len(available_years)} year(s): {', '.join(map(str, sorted(available_years)))}[/bold cyan]\n")
+        years = available_years
 
     # Handle --sync: update all playlists in state
     if sync:

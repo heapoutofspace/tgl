@@ -141,7 +141,8 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file='.env',
         env_file_encoding='utf-8',
-        extra='ignore'
+        extra='ignore',
+        populate_by_name=True  # Allow field name in addition to aliases (needed for TOML config)
     )
 
     @classmethod

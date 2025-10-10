@@ -143,6 +143,33 @@ class SpotifyManager:
             else:
                 console.print(f"[dim]API: {operation}[/dim]")
 
+    def _upload_cover(self, playlist_id: str, text: str | None = None):
+        """Upload cover art to a playlist
+
+        Args:
+            playlist_id: Spotify playlist ID
+            text: Text to render on cover (year or episode ID). If None, uses plain cover.
+        """
+        from .cover import generate_cover_art, COVER_VERSION
+
+        if self.dry_run:
+            cover_desc = text if text else "plain cover"
+            console.print(f"[dim]Would upload cover: {cover_desc}[/dim]")
+            return
+
+        try:
+            # Generate cover art as base64
+            image_data = generate_cover_art(text)
+
+            # Upload to Spotify
+            client = self._get_user_client()
+            cover_desc = text if text else "plain cover"
+            self._log_api_call("UPLOAD_COVER", cover_desc)
+            client.playlist_upload_cover_image(playlist_id, image_data)
+            console.print(f"[green]✓[/green] Cover art uploaded")
+        except Exception as e:
+            console.print(f"[yellow]Warning: Could not upload cover art: {e}[/yellow]")
+
     def _save_state(self, tracks_only: bool = False):
         """Save state to spotify.json
 
@@ -172,7 +199,7 @@ class SpotifyManager:
     def _get_user_client(self) -> spotipy.Spotify:
         """Get or create user auth client for playlist operations"""
         if self._user_client is None:
-            scope = "playlist-modify-public playlist-modify-private playlist-read-private"
+            scope = "playlist-modify-public playlist-modify-private playlist-read-private ugc-image-upload"
             # Use integrated cache handler that stores tokens in spotify.json
             cache_handler = IntegratedCacheHandler(self.state_file)
             auth_manager = SpotifyOAuth(
@@ -647,11 +674,18 @@ class SpotifyManager:
         else:
             console.print(f"[yellow]Playlist already up to date[/yellow]")
 
+        # Upload cover art if needed
+        from .cover import COVER_VERSION
+        current_cover_version = self.state["playlists"].get(playlist_key, {}).get("cover_version")
+        if current_cover_version != COVER_VERSION:
+            self._upload_cover(playlist_id, episode.episode_id)
+
         # Update state
         self.state["playlists"][playlist_key] = {
             "id": playlist_id,
             "name": playlist_name,
-            "tracks": track_ids
+            "tracks": track_ids,
+            "cover_version": COVER_VERSION
         }
         self._save_state()
 
@@ -841,11 +875,18 @@ class SpotifyManager:
         else:
             console.print(f"[yellow]Playlist already up to date[/yellow]")
 
+        # Upload cover art if needed
+        from .cover import COVER_VERSION
+        current_cover_version = self.state["playlists"].get(playlist_key, {}).get("cover_version")
+        if current_cover_version != COVER_VERSION:
+            self._upload_cover(playlist_id, str(year))
+
         # Update state
         self.state["playlists"][playlist_key] = {
             "id": playlist_id,
             "name": playlist_name,
-            "tracks": track_ids
+            "tracks": track_ids,
+            "cover_version": COVER_VERSION
         }
         self._save_state()
 
@@ -1032,11 +1073,18 @@ class SpotifyManager:
         else:
             console.print(f"[yellow]Playlist already up to date[/yellow]")
 
+        # Upload cover art if needed (no text for all-tracks playlist)
+        from .cover import COVER_VERSION
+        current_cover_version = self.state["playlists"].get(playlist_key, {}).get("cover_version")
+        if current_cover_version != COVER_VERSION:
+            self._upload_cover(playlist_id, None)
+
         # Update state
         self.state["playlists"][playlist_key] = {
             "id": playlist_id,
             "name": playlist_name,
-            "tracks": found_tracks  # Store in order
+            "tracks": found_tracks,  # Store in order
+            "cover_version": COVER_VERSION
         }
         self._save_state()
 

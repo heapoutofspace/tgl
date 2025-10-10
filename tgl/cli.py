@@ -893,6 +893,14 @@ def config_init():
     console.print("[dim]You can update your configuration anytime with: [cyan]tgl config set[/cyan][/dim]\n")
 
 
+@app.command(hidden=True)
+def cover(text: Optional[str] = typer.Argument(None)):
+    """Secret command to generate playlist cover art for testing"""
+    from .cover import display_cover_inline
+
+    display_cover_inline(text)
+
+
 def main():
     """Main CLI entry point"""
     app()

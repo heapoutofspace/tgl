@@ -60,7 +60,7 @@ def main(ctx: typer.Context):
         console.print("  [cyan]search[/cyan]               Search episodes by title, description, or tracks")
         console.print("  [cyan]download[/cyan]             Download an episode audio file")
         console.print("  [cyan]spotify[/cyan]              Import tracklists to Spotify playlist")
-        console.print("  [cyan]refresh[/cyan]              Refresh episode metadata from RSS feed")
+        console.print("  [cyan]update[/cyan]               Update episode metadata from RSS feed")
         console.print("  [cyan]config[/cyan]               Manage TGL configuration\n")
 
         console.print("[bold]Examples:[/bold]\n")
@@ -85,17 +85,17 @@ def main(ctx: typer.Context):
         console.print("  [dim]# Search for episodes with tracks by LAU[/dim]")
         console.print("  [green]tgl.py search LAU[/green]\n")
 
-        console.print("  [dim]# Refresh the episode cache[/dim]")
-        console.print("  [green]tgl.py refresh[/green]\n")
+        console.print("  [dim]# Update the episode cache[/dim]")
+        console.print("  [green]tgl.py update[/green]\n")
 
         console.print("[dim]For detailed help on any command, use:[/dim]")
         console.print("  [green]tgl.py [command] --help[/green]\n")
 
-@app.command()
-def refresh():
-    """Refresh episode metadata cache from RSS feed"""
+@app.command(name="update")
+def update_cache():
+    """Update episode metadata cache from RSS feed"""
     console.print("\n[bold cyan]" + "═" * 60)
-    console.print("[bold cyan]Refreshing Episode Metadata")
+    console.print("[bold cyan]Updating Episode Metadata")
     console.print("[bold cyan]" + "═" * 60 + "\n")
 
     cache = MetadataCache()
@@ -126,6 +126,17 @@ def refresh():
 
     console.print(f"[bold green]✓ Done![/bold green] Cached {len(episodes)} episodes")
     console.print("[bold cyan]" + "═" * 60 + "\n")
+
+# Aliases for backward compatibility and convenience
+@app.command(name="refresh", hidden=True)
+def refresh_alias():
+    """Alias for update command"""
+    update_cache()
+
+@app.command(name="fetch", hidden=True)
+def fetch_alias():
+    """Alias for update command"""
+    update_cache()
 
 
 @app.command()

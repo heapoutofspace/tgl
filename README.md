@@ -191,11 +191,11 @@ tgl spotify --dryrun
 tgl spotify --force-refresh
 ```
 
-### Refresh Cache
+### Update Cache
 
 ```bash
-# Refresh episode metadata
-tgl refresh
+# Update episode metadata
+tgl update
 ```
 
 ### Configuration Management
@@ -356,7 +356,7 @@ The project was migrated from a single-file uv script (`tgl.py`) to a proper Pyt
 
 ### "No episodes found"
 - Check `.env` file exists and has correct `TGL_PATREON_RSS_URL`
-- Run `tgl refresh` to rebuild cache
+- Run `tgl update` to rebuild cache
 
 ### "Track not found on Spotify"
 - Some tracks may not be available on Spotify

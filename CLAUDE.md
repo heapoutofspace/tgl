@@ -274,7 +274,7 @@ The search functionality uses **Whoosh**, a pure Python full-text search library
 - Episode descriptions (1x boost)
 
 The index is automatically rebuilt when:
-- Running `./tgl.py refresh` command
+- Running `./tgl.py update` command
 - Metadata cache is refreshed due to staleness (> 1 hour old)
 - Index doesn't exist when searching
 

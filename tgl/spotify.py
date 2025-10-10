@@ -7,6 +7,7 @@ This module handles all Spotify operations including:
 """
 
 import json
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import spotipy
@@ -211,6 +212,8 @@ class SpotifyManager:
         text = text.lower()
         # Replace separators
         text = text.replace('&', ',').replace(' and ', ',')
+        # Normalize ellipsis (both ... and unicode …)
+        text = text.replace('…', ' ').replace('...', ' ')
         # Remove extra whitespace
         text = ' '.join(text.split())
         # Remove punctuation that doesn't affect meaning
@@ -304,9 +307,29 @@ class SpotifyManager:
         if not artist_match:
             artist_match = expected_artist_norm in all_artists or all_artists in expected_artist_norm
 
-        # Also try fuzzy match on artist for typo tolerance
+        # Try fuzzy match on artist for typo tolerance
         if not artist_match:
             artist_match = any(self._strings_similar(expected_artist, sa) for sa in spotify_artists)
+
+        # Try removing trailing numbers from both sides (e.g., "TimeMachine1958" vs "TimeMachine1985")
+        if not artist_match:
+            # Split expected artist by separators (handles multi-artist tracks)
+            expected_parts = [p.strip() for p in re.split(r'[,&]', expected_artist_norm)]
+
+            for expected_part in expected_parts:
+                # Extract core artist name by removing trailing digits
+                expected_core = re.sub(r'\d+$', '', expected_part).strip()
+
+                for sa in spotify_artists_norm:
+                    spotify_core = re.sub(r'\d+$', '', sa).strip()
+                    # Check if core names match (must be substantial, not just 1-2 chars)
+                    if len(expected_core) > 3 and len(spotify_core) > 3:
+                        if expected_core == spotify_core or expected_core in spotify_core or spotify_core in expected_core:
+                            artist_match = True
+                            break
+
+                if artist_match:
+                    break
 
         return title_match and artist_match
 
@@ -405,6 +428,31 @@ class SpotifyManager:
                     self._save_state()
 
                     return (track_id, track_name, artists)
+
+            # Strategy 4: Swap artist and title (sometimes RSS has them backwards)
+            # Only try if both artist and title are substantial (not just a single word)
+            if ' ' in track.artist or ' ' in track.title or len(track.artist) < 15:
+                swap_query = f"{track.title} {track.artist}"
+                results = client.search(q=swap_query, type='track', limit=10)
+
+                for track_data in results['tracks']['items']:
+                    # Verify with swapped artist/title
+                    if self._verify_track_match(track_data, track.title, track.artist):
+                        track_id = track_data['id']
+                        track_name = track_data['name']
+                        artists = [artist['name'] for artist in track_data['artists']]
+
+                        console.print(f"[yellow]  Note: Found with swapped artist/title[/yellow]")
+
+                        # Cache the result
+                        self.state["tracks"][search_key] = {
+                            "id": track_id,
+                            "name": track_name,
+                            "artists": artists
+                        }
+                        self._save_state()
+
+                        return (track_id, track_name, artists)
 
             # No matching track found
             console.print(f"[yellow]⚠ Track not found:[/yellow] {track.artist} - {track.title}")

@@ -172,22 +172,22 @@ class Settings(BaseSettings):
         else:
             return (init_settings, env_settings, dotenv_settings, file_secret_settings)
 
-    # Patreon RSS feed URL
-    patreon_rss_url: str = Field(
-        ...,
+    # Patreon RSS feed URL (required for most operations)
+    patreon_rss_url: Optional[str] = Field(
+        default=None,
         validation_alias=AliasChoices('TGL_PATREON_RSS_URL', 'PATREON_RSS_URL'),
         description="Patreon RSS feed URL with auth token"
     )
 
-    # Spotify API credentials
-    spotify_client_id: str = Field(
-        ...,
+    # Spotify API credentials (optional - only needed for spotify command)
+    spotify_client_id: Optional[str] = Field(
+        default=None,
         validation_alias=AliasChoices('TGL_SPOTIFY_CLIENT_ID', 'SPOTIFY_CLIENT_ID'),
         description="Spotify API client ID"
     )
 
-    spotify_client_secret: str = Field(
-        ...,
+    spotify_client_secret: Optional[str] = Field(
+        default=None,
         validation_alias=AliasChoices('TGL_SPOTIFY_CLIENT_SECRET', 'SPOTIFY_CLIENT_SECRET'),
         description="Spotify API client secret"
     )

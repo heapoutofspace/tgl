@@ -34,6 +34,11 @@ pip install -e .
 
 ### Configuration
 
+**Required:** Patreon RSS URL
+**Optional:** Spotify credentials (only needed for `tgl spotify` command)
+
+On first run, TGL will automatically guide you through the setup process. You only need to provide your Patreon RSS URL to get started.
+
 TGL supports multiple configuration methods (in priority order):
 
 1. **Environment variables** (highest priority)
@@ -44,7 +49,7 @@ TGL supports multiple configuration methods (in priority order):
 #### Interactive Setup
 
 ```bash
-# Initialize config file with prompts
+# Initialize or reconfigure TGL
 tgl config init
 ```
 
@@ -75,7 +80,10 @@ Config file locations:
 **Option 2: Environment variables**
 
 ```bash
+# Required
 export TGL_PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-token
+
+# Optional - Spotify integration
 export TGL_SPOTIFY_CLIENT_ID=your_client_id
 export TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
 export TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
@@ -87,22 +95,21 @@ export TGL_SPOTIFY_PLAYLIST_NAME=TGL
 Create a `.env` file in the project directory:
 
 ```bash
-# Patreon RSS Feed
+# Patreon RSS Feed (REQUIRED)
 TGL_PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-token
 
-# Spotify API (from https://developer.spotify.com/dashboard)
-TGL_SPOTIFY_CLIENT_ID=your_client_id
-TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
-TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
-
-# Playlist Name
-TGL_SPOTIFY_PLAYLIST_NAME=TGL
+# Spotify API (OPTIONAL - only needed for 'tgl spotify' command)
+# Create an app at: https://developer.spotify.com/dashboard
+# TGL_SPOTIFY_CLIENT_ID=your_client_id
+# TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
+# TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
+# TGL_SPOTIFY_PLAYLIST_NAME=TGL
 
 # Optional: Override data directory location
 # TGL_DATA_DIR=/custom/path/to/data
 ```
 
-> ⚠️ **Important**: Use `127.0.0.1` not `localhost` for the Spotify redirect URI (Spotify blocks localhost)
+> ⚠️ **Note**: Spotify credentials are optional. If configured, use `127.0.0.1` not `localhost` for the redirect URI (Spotify blocks localhost)
 
 #### Custom Data Directory
 

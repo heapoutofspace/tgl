@@ -38,6 +38,15 @@ app = typer.Typer(
 @app.callback()
 def main(ctx: typer.Context):
     """TGL (The Guestlist) Podcast CLI Tool"""
+    # Check if RSS URL is configured (skip check for config commands)
+    if ctx.invoked_subcommand != "config" and not settings.patreon_rss_url:
+        console.print("\n[yellow]⚠ TGL is not yet configured[/yellow]\n")
+        console.print("[dim]Let's set up your configuration...[/dim]\n")
+        config_init()
+        console.print("[green]✓ Configuration complete![/green]")
+        console.print("[dim]Please run your command again to use TGL.[/dim]\n")
+        raise typer.Exit(0)
+
     if ctx.invoked_subcommand is None:
         # No command provided, show custom help
         console.print("\n[bold cyan]" + "═" * 70)
@@ -468,6 +477,16 @@ def spotify(
     use_cache: bool = typer.Option(False, "--use-cache", help="Use cache even when filtering by year"),
 ):
     """Import episode tracklists to Spotify playlist"""
+    # Check if Spotify credentials are configured
+    if not dryrun and (not settings.spotify_client_id or not settings.spotify_client_secret):
+        console.print("\n[red]✗ Spotify credentials not configured[/red]\n")
+        console.print("[dim]To use Spotify integration, you need to:[/dim]\n")
+        console.print("1. Create a Spotify app at: [cyan]https://developer.spotify.com/dashboard[/cyan]")
+        console.print("2. Configure credentials with: [cyan]tgl config set spotify_client_id YOUR_ID[/cyan]")
+        console.print("3. And: [cyan]tgl config set spotify_client_secret YOUR_SECRET[/cyan]\n")
+        console.print("[dim]Or run: [cyan]tgl config init[/cyan] to reconfigure everything[/dim]\n")
+        raise typer.Exit(1)
+
     console.print("\n[bold cyan]" + "═" * 60)
     console.print("[bold cyan]TGL to Spotify Playlist")
     if dryrun:
@@ -919,7 +938,7 @@ def config_path(
 def config_init():
     """Initialize a new configuration file with prompts"""
     console.print("\n[bold cyan]" + "═" * 60)
-    console.print("[bold cyan]Initialize TGL Configuration")
+    console.print("[bold cyan]Welcome to TGL Configuration")
     console.print("[bold cyan]" + "═" * 60 + "\n")
 
     if paths.config_file.exists():
@@ -927,31 +946,38 @@ def config_init():
         if not typer.confirm("Overwrite existing config?"):
             raise typer.Exit(0)
 
-    console.print("[dim]Enter configuration values (press Enter to skip):[/dim]\n")
+    console.print("[bold]Required Configuration:[/bold]\n")
 
     config_data = {}
 
-    # Patreon RSS URL
-    patreon_url = typer.prompt("Patreon RSS URL", default="", show_default=False)
-    if patreon_url:
-        config_data["patreon_rss_url"] = patreon_url
+    # Patreon RSS URL (required)
+    while True:
+        patreon_url = typer.prompt("Patreon RSS URL (required)")
+        if patreon_url.strip():
+            config_data["patreon_rss_url"] = patreon_url.strip()
+            break
+        console.print("[red]Patreon RSS URL is required to use TGL[/red]")
 
-    # Spotify settings
-    spotify_id = typer.prompt("Spotify Client ID", default="", show_default=False)
-    if spotify_id:
-        config_data["spotify_client_id"] = spotify_id
+    # Spotify settings (optional)
+    console.print("\n[bold]Optional - Spotify Integration:[/bold]")
+    console.print("[dim]Skip this section if you don't plan to use Spotify features[/dim]\n")
 
-    spotify_secret = typer.prompt("Spotify Client Secret", default="", show_default=False, hide_input=True)
-    if spotify_secret:
-        config_data["spotify_client_secret"] = spotify_secret
+    if typer.confirm("Configure Spotify integration?", default=False):
+        spotify_id = typer.prompt("Spotify Client ID", default="", show_default=False)
+        if spotify_id:
+            config_data["spotify_client_id"] = spotify_id
 
-    spotify_uri = typer.prompt("Spotify Redirect URI", default="http://127.0.0.1:8888/callback")
-    if spotify_uri:
-        config_data["spotify_redirect_uri"] = spotify_uri
+        spotify_secret = typer.prompt("Spotify Client Secret", default="", show_default=False, hide_input=True)
+        if spotify_secret:
+            config_data["spotify_client_secret"] = spotify_secret
 
-    playlist_name = typer.prompt("Spotify Playlist Name", default="TGL")
-    if playlist_name:
-        config_data["spotify_playlist_name"] = playlist_name
+        spotify_uri = typer.prompt("Spotify Redirect URI", default="http://127.0.0.1:8888/callback")
+        if spotify_uri:
+            config_data["spotify_redirect_uri"] = spotify_uri
+
+        playlist_name = typer.prompt("Spotify Playlist Name", default="TGL")
+        if playlist_name:
+            config_data["spotify_playlist_name"] = playlist_name
 
     # Write config file
     with open(paths.config_file, 'wb') as f:
@@ -959,6 +985,7 @@ def config_init():
 
     console.print(f"\n[green]✓[/green] Configuration saved to:")
     console.print(f"[cyan]{paths.config_file}[/cyan]\n")
+    console.print("[dim]You can update your configuration anytime with: [cyan]tgl config set[/cyan][/dim]\n")
 
 
 def main():

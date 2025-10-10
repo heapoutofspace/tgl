@@ -482,6 +482,7 @@ def spotify(
     episodes: Optional[List[str]] = typer.Option(None, "--episode", help="Create playlist for specific episode (can be used multiple times)"),
     years: Optional[List[int]] = typer.Option(None, "--year", help="Create playlist for all tracks from a year (can be used multiple times)"),
     all_tracks: bool = typer.Option(False, "--all", help="Create playlist with ALL tracks from all episodes"),
+    sync: bool = typer.Option(False, "--sync", help="Update all playlists currently tracked in state"),
     dry_run: bool = typer.Option(False, "-n", "--dry-run", help="Dry run mode (no write operations)"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show all Spotify API calls"),
 ):
@@ -493,6 +494,10 @@ def spotify(
       tgl spotify --episode E390 --year 2024 --all
 
     This will create/update all three playlists in sequence.
+
+    Use --sync to update all playlists currently tracked in state:
+
+      tgl spotify --sync
     """
     # Check if Spotify credentials are configured
     if not settings.spotify_client_id or not settings.spotify_client_secret:
@@ -504,18 +509,25 @@ def spotify(
         console.print("[dim]Or run: [cyan]tgl config init[/cyan] to reconfigure everything[/dim]\n")
         raise typer.Exit(1)
 
+    # Validate that --sync is mutually exclusive with other playlist options
+    if sync and (episodes or years or all_tracks):
+        console.print("\n[red]Error: --sync cannot be used with --episode, --year, or --all[/red]\n")
+        console.print("[dim]Use --sync alone to update all tracked playlists, or specify individual playlists without --sync[/dim]\n")
+        raise typer.Exit(1)
+
     # Initialize Spotify manager
     from .spotify import SpotifyManager
     spotify_manager = SpotifyManager(settings, dry_run=dry_run, verbose=verbose)
 
     # If no options provided, just run authorization
-    if not episodes and not years and not all_tracks:
+    if not episodes and not years and not all_tracks and not sync:
         if spotify_manager.authorize():
             console.print("[green]✓ Spotify authorization successful[/green]")
             console.print("[dim]You can now use Spotify commands like:[/dim]")
             console.print("[dim]  [cyan]tgl spotify --episode E390[/cyan][/dim]")
             console.print("[dim]  [cyan]tgl spotify --year 2024[/cyan][/dim]")
-            console.print("[dim]  [cyan]tgl spotify --all[/cyan][/dim]\n")
+            console.print("[dim]  [cyan]tgl spotify --all[/cyan][/dim]")
+            console.print("[dim]  [cyan]tgl spotify --sync[/cyan] (update all tracked playlists)[/dim]\n")
         raise typer.Exit(0)
 
     # Load episode cache
@@ -533,6 +545,70 @@ def spotify(
 
     # Track overall success
     all_success = True
+
+    # Handle --sync: update all playlists in state
+    if sync:
+        playlists = spotify_manager.state.get("playlists", {})
+
+        if not playlists:
+            console.print("\n[yellow]No playlists tracked in state yet[/yellow]")
+            console.print("[dim]Create playlists first with --episode, --year, or --all[/dim]\n")
+            raise typer.Exit(0)
+
+        console.print(f"\n[bold cyan]Syncing {len(playlists)} tracked playlist(s)[/bold cyan]\n")
+
+        for playlist_key in playlists.keys():
+            # Parse playlist key to determine type
+            if playlist_key.startswith("episode:"):
+                episode_id_str = playlist_key.split(":", 1)[1]
+                try:
+                    episode_id = parse_episode_id(episode_id_str)
+                    ep = cache.get_episode(episode_id)
+                    if not ep:
+                        console.print(f"[red]Error: Episode {episode_id_str} not found in cache (skipping)[/red]")
+                        all_success = False
+                        continue
+
+                    success = spotify_manager.sync_episode_playlist(
+                        ep,
+                        playlist_format=settings.spotify_episode_playlist_format
+                    )
+                    if not success:
+                        all_success = False
+                except ValueError as e:
+                    console.print(f"[red]Error parsing episode ID {episode_id_str}: {e} (skipping)[/red]")
+                    all_success = False
+
+            elif playlist_key.startswith("year:"):
+                year_str = playlist_key.split(":", 1)[1]
+                try:
+                    year = int(year_str)
+                    success = spotify_manager.sync_year_playlist(
+                        year,
+                        all_episodes_list,
+                        playlist_format=settings.spotify_year_playlist_format
+                    )
+                    if not success:
+                        all_success = False
+                except ValueError as e:
+                    console.print(f"[red]Error parsing year {year_str}: {e} (skipping)[/red]")
+                    all_success = False
+
+            elif playlist_key == "all":
+                success = spotify_manager.sync_all_playlist(
+                    all_episodes_list,
+                    playlist_format=settings.spotify_all_playlist_format
+                )
+                if not success:
+                    all_success = False
+
+            else:
+                console.print(f"[yellow]Warning: Unknown playlist key '{playlist_key}' (skipping)[/yellow]")
+
+        console.print(f"\n[bold cyan]Sync complete[/bold cyan]\n")
+        if not all_success:
+            raise typer.Exit(1)
+        raise typer.Exit(0)
 
     # Process episode playlists
     if episodes:

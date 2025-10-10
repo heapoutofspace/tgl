@@ -227,7 +227,19 @@ class PatreonPodcastFetcher:
                 continue
 
             # Check if we've left the tracklist section (common section separators)
-            if in_tracklist and any(marker in line_lower for marker in ['----', '====', 'best of', 'longlist', 'links:', 'support', 'patreon', 'thanks to', 'our love to']):
+            # Use more specific patterns to avoid false positives with artist names
+            exit_patterns = [
+                r'^-{3,}',  # Multiple dashes at start
+                r'^={3,}',  # Multiple equals at start
+                r'\bbest of\b',
+                r'\blonglist\b',
+                r'\blinks:\b',
+                r'\bsupport us\b',  # More specific than just "support"
+                r'\bpatreon\b',
+                r'\bthanks to\b',
+                r'\bour love to\b'
+            ]
+            if in_tracklist and any(re.search(pattern, line_lower) for pattern in exit_patterns):
                 in_tracklist = False
                 continue
 

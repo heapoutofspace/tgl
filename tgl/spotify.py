@@ -8,7 +8,7 @@ This module handles all Spotify operations including:
 
 import json
 import re
-import time
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import spotipy
@@ -377,13 +377,18 @@ class SpotifyManager:
 
             # This is a cached miss - check if it's still valid (less than 1 day old)
             if "timestamp" in cached:
-                age_seconds = time.time() - cached["timestamp"]
-                if age_seconds < 86400:  # 86400 seconds = 1 day
-                    self._log_api_call("CACHE_MISS", f"{track.artist} - {track.title} (cached)")
-                    return None
-                else:
-                    # Miss is stale, search again
-                    self._log_api_call("CACHE_MISS_EXPIRED", f"{track.artist} - {track.title}")
+                try:
+                    cached_time = datetime.fromisoformat(cached["timestamp"])
+                    age = datetime.now() - cached_time
+                    if age < timedelta(days=1):
+                        self._log_api_call("CACHE_MISS", f"{track.artist} - {track.title} (cached)")
+                        return None
+                    else:
+                        # Miss is stale, search again
+                        self._log_api_call("CACHE_MISS_EXPIRED", f"{track.artist} - {track.title}")
+                except (ValueError, TypeError):
+                    # Invalid timestamp format, search again
+                    pass
 
         try:
             client = self._get_search_client()
@@ -409,7 +414,7 @@ class SpotifyManager:
                         "id": track_id,
                         "name": track_name,
                         "artists": artists,
-                        "timestamp": time.time()
+                        "timestamp": datetime.now().isoformat()
                     }
                     self._save_state(tracks_only=True)
 
@@ -435,7 +440,7 @@ class SpotifyManager:
                         "id": track_id,
                         "name": track_name,
                         "artists": artists,
-                        "timestamp": time.time()
+                        "timestamp": datetime.now().isoformat()
                     }
                     self._save_state(tracks_only=True)
 
@@ -463,7 +468,7 @@ class SpotifyManager:
                         "id": track_id,
                         "name": track_name,
                         "artists": artists,
-                        "timestamp": time.time()
+                        "timestamp": datetime.now().isoformat()
                     }
                     self._save_state(tracks_only=True)
 
@@ -490,7 +495,7 @@ class SpotifyManager:
                             "id": track_id,
                             "name": track_name,
                             "artists": artists,
-                            "timestamp": time.time()
+                            "timestamp": datetime.now().isoformat()
                         }
                         self._save_state(tracks_only=True)
 
@@ -503,7 +508,7 @@ class SpotifyManager:
 
             # Cache miss to avoid re-searching for 1 day
             self.state["tracks"][search_key] = {
-                "timestamp": time.time()
+                "timestamp": datetime.now().isoformat()
             }
             self._save_state(tracks_only=True)
 
@@ -514,7 +519,7 @@ class SpotifyManager:
 
             # Cache miss to avoid re-searching for 1 day
             self.state["tracks"][search_key] = {
-                "timestamp": time.time()
+                "timestamp": datetime.now().isoformat()
             }
             self._save_state(tracks_only=True)
 

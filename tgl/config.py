@@ -205,6 +205,12 @@ class Settings(BaseSettings):
         description="Default Spotify playlist name"
     )
 
+    spotify_episode_playlist_format: str = Field(
+        default='TGL {id}: {title}',
+        validation_alias=AliasChoices('TGL_SPOTIFY_EPISODE_PLAYLIST_FORMAT', 'SPOTIFY_EPISODE_PLAYLIST_FORMAT'),
+        description="Format for episode playlist names ({id} and {title} are replaced)"
+    )
+
     # Path overrides (documentation only - these are read directly by TGLPaths before Settings loads)
     data_dir: Optional[str] = Field(
         default=None,

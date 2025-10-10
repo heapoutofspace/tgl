@@ -109,6 +109,30 @@ class TestTracklistParsing:
             assert "channeling" not in track.artist.lower()
             assert "expect" not in track.artist.lower()
 
+    def test_prose_filtering_e390_issue(self, fetcher):
+        """Should filter out prose with contractions like 'week's' (E390 issue)"""
+        html = """
+        <p>This week's episode of The Guestlist is a bonafide banger - I promise. New music from Prospa, Notre Dame and loads more, plus some gems from the crates and a couple of essential rewinds.</p>
+        <p>Happy weekend one and all!</p>
+        <p><strong>Tracklist</strong></p>
+        <p># Prospa - Love Songs (feat. Kosmo Kint)</p>
+        <p># Notre Dame - Haunted Nights</p>
+        <p># gizA djs - Can You Feel It</p>
+        """
+        tracks = fetcher._parse_structured_tracklist(html)
+
+        # Should only get the 3 tracks, not the prose
+        assert len(tracks) == 3
+        assert tracks[0].artist == "Prospa"
+        assert tracks[1].artist == "Notre Dame"
+        assert tracks[2].artist == "gizA djs"
+
+        # Verify the prose isn't in there
+        for track in tracks:
+            assert "week" not in track.artist.lower() or "weekend" in track.artist.lower()  # "weekend" is ok as artist name
+            assert "promise" not in track.artist.lower()
+            assert "bonafide" not in track.artist.lower()
+
     def test_explicit_tracklist_marker_required(self, fetcher):
         """After explicit 'Tracklist' marker, should prefer explicit marker"""
         html = """

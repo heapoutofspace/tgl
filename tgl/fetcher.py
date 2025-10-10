@@ -154,7 +154,7 @@ class PatreonPodcastFetcher:
             # Strong prose indicators - always filter these (contractions, very conversational words)
             strong_prose_indicators = [
                 r"(?:n't|'ll|'ve|'re)\b",  # Contractions
-                r"\b[a-z]'s\b",  # Contraction 's after lowercase word (e.g., "it's", "that's") - \b ensures word boundary at start
+                r"\b[a-z]+'s\b",  # Contraction 's after lowercase word (e.g., "it's", "that's", "week's") - \b ensures word boundary
                 r'\b(channeling|expect)\b'  # Very conversational words
             ]
 
@@ -295,7 +295,7 @@ class PatreonPodcastFetcher:
                     # Strong prose indicators - always filter these (contractions, very conversational words)
                     strong_prose_indicators = [
                         r"(?:n't|'ll|'ve|'re)\b",  # Contractions
-                        r"\b[a-z]'s\b",  # Contraction 's after lowercase word (e.g., "it's", "that's") - \b ensures word boundary at start
+                        r"\b[a-z]+'s\b",  # Contraction 's after lowercase word (e.g., "it's", "that's", "week's") - \b ensures word boundary
                         r'\b(channeling|expect)\b'  # Very conversational words
                     ]
 

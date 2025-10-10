@@ -21,7 +21,6 @@ from tgl import (
     SearchIndex,
     PatreonPodcastFetcher,
     StateManager,
-    SpotifyPlaylistManager,
     parse_episode_id,
     Track,
     paths,
@@ -481,15 +480,16 @@ def download(episode_id: str):
 
 @app.command()
 def spotify(
-    episodes_limit: Optional[int] = typer.Option(None, "-n", "--episodes", help="Number of recent episodes to process"),
-    year: Optional[int] = typer.Option(None, "--year", help="Filter episodes by year"),
-    dryrun: bool = typer.Option(False, "--dryrun", help="Dry run mode (no Spotify operations)"),
-    force_refresh: bool = typer.Option(False, "--force-refresh", help="Bypass cache, reprocess all episodes"),
-    use_cache: bool = typer.Option(False, "--use-cache", help="Use cache even when filtering by year"),
+    episode: Optional[str] = typer.Option(None, "--episode", help="Create playlist for specific episode (e.g., E390)"),
+    dry_run: bool = typer.Option(False, "-n", "--dry-run", help="Dry run mode (no write operations)"),
 ):
-    """Import episode tracklists to Spotify playlist"""
+    """Manage Spotify playlists for TGL episodes
+
+    Run without arguments to authorize Spotify access.
+    Use --episode to create/update a playlist for a specific episode.
+    """
     # Check if Spotify credentials are configured
-    if not dryrun and (not settings.spotify_client_id or not settings.spotify_client_secret):
+    if not settings.spotify_client_id or not settings.spotify_client_secret:
         console.print("\n[red]✗ Spotify credentials not configured[/red]\n")
         console.print("[dim]To use Spotify integration, you need to:[/dim]\n")
         console.print("1. Create a Spotify app at: [cyan]https://developer.spotify.com/dashboard[/cyan]")
@@ -498,19 +498,19 @@ def spotify(
         console.print("[dim]Or run: [cyan]tgl config init[/cyan] to reconfigure everything[/dim]\n")
         raise typer.Exit(1)
 
-    console.print("\n[bold cyan]" + "═" * 60)
-    console.print("[bold cyan]TGL to Spotify Playlist")
-    if dryrun:
-        console.print("[bold yellow]🔍 DRY RUN MODE[/bold yellow]")
-    console.print("[bold cyan]" + "═" * 60 + "\n")
+    # Initialize Spotify manager
+    from .spotify import SpotifyManager
+    spotify_manager = SpotifyManager(settings, dry_run=dry_run)
 
-    # Add year to playlist name if filtering
-    PLAYLIST_NAME = f"{settings.spotify_playlist_name} {year}" if year else settings.spotify_playlist_name
+    # If no options provided, just run authorization
+    if not episode:
+        if spotify_manager.authorize():
+            console.print("[green]✓ Spotify authorization successful[/green]")
+            console.print("[dim]You can now use Spotify commands like: [cyan]tgl spotify --episode E390[/cyan][/dim]\n")
+        raise typer.Exit(0)
 
-    # Load cached metadata with auto-refresh
+    # Load episode cache
     cache = MetadataCache()
-
-    # Auto-refresh if cache is stale or empty
     if cache.should_auto_refresh():
         fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
         cache.refresh(fetcher)
@@ -519,168 +519,24 @@ def spotify(
         console.print("[red]Error: Could not load episodes[/red]")
         raise typer.Exit(1)
 
-    # Use separate state file for dryrun mode
-    state_file = paths.state_file_dryrun if dryrun else paths.state_file
-    state = StateManager(state_file)
+    # Parse episode ID
+    try:
+        episode_id = parse_episode_id(episode)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
+    # Get episode
+    ep = cache.get_episode(episode_id)
+    if not ep:
+        console.print(f"[red]Error: Episode {episode} not found[/red]")
+        raise typer.Exit(1)
 
-        # Get episodes from cache
-        fetch_task = progress.add_task("[cyan]Loading episodes from cache...", total=None)
+    # Sync episode playlist
+    success = spotify_manager.sync_episode_playlist(ep, playlist_format=settings.spotify_episode_playlist_format)
 
-        if year:
-            fetched_episodes = cache.get_episodes_by_year(year)
-            if episodes_limit:
-                fetched_episodes = fetched_episodes[:episodes_limit]
-        else:
-            # Get all episodes sorted by ID descending (newest first)
-            fetched_episodes = sorted(cache.episodes.values(), key=lambda e: e.id, reverse=True)
-            if episodes_limit:
-                fetched_episodes = fetched_episodes[:episodes_limit]
-
-        progress.update(fetch_task, completed=True, total=1)
-
-        if not fetched_episodes:
-            console.print("[red]No episodes found![/red]")
-            raise typer.Exit(1)
-
-        console.print(f"[green]✓[/green] Loaded {len(fetched_episodes)} episodes\n")
-
-        # Filter out already-processed episodes
-        should_use_cache = not force_refresh and (not year or use_cache)
-
-        if should_use_cache:
-            new_episodes = [ep for ep in fetched_episodes if not state.is_episode_processed(ep.link)]
-            cached_count = len(fetched_episodes) - len(new_episodes)
-
-            if cached_count > 0:
-                console.print(f"[cyan]ℹ[/cyan] Skipping {cached_count} already-processed episodes\n")
-
-            fetched_episodes = new_episodes
-
-        if not fetched_episodes:
-            console.print("[yellow]No new episodes to process[/yellow]\n")
-            return
-
-        console.print(f"[cyan]Processing {len(fetched_episodes)} episodes...[/cyan]\n")
-
-        # Get tracklists from cached episodes
-        all_tracks = []
-        episode_tracks = {}
-
-        parse_task = progress.add_task("[cyan]Loading tracklists...", total=len(fetched_episodes))
-
-        for episode in fetched_episodes:
-            # Use cached tracklist
-            tracks = episode.tracklist if episode.tracklist else []
-            # Convert Track objects to dict format expected by the rest of the code
-            track_dicts = [Track(artist=t.artist, track=t.title, query=f"{t.artist} {t.title}") for t in tracks]
-            all_tracks.extend(track_dicts)
-            episode_tracks[episode.link] = track_dicts
-            progress.update(parse_task, advance=1)
-
-        console.print(f"[green]✓[/green] Loaded {len(all_tracks)} tracks from {len(fetched_episodes)} episodes\n")
-
-        if dryrun:
-            # Dry run mode
-            console.print("[yellow]⚠ Dry run mode - skipping Spotify operations[/yellow]\n")
-            console.print(f"[cyan]Summary:[/cyan]")
-            console.print(f"  • Episodes processed: {len(fetched_episodes)}")
-            console.print(f"  • Total tracks extracted: {len(all_tracks)}")
-            console.print(f"\n[dim]Tracks found:[/dim]")
-            for i, track in enumerate(all_tracks[:10], 1):
-                console.print(f"  {i}. {track.artist} - {track.track}")
-            if len(all_tracks) > 10:
-                console.print(f"  ... and {len(all_tracks) - 10} more")
-        else:
-            # Initialize Spotify
-            console.print("[cyan]Initializing Spotify connection...[/cyan]")
-            spotify_manager = SpotifyPlaylistManager()
-            console.print("[green]✓[/green] Connected to Spotify\n")
-
-            # Get retryable failed tracks
-            retryable_tracks = state.get_retryable_failed_tracks()
-
-            if retryable_tracks:
-                console.print(f"[cyan]ℹ[/cyan] Found {len(retryable_tracks)} previously failed tracks to retry\n")
-
-            total_tracks_to_search = len(all_tracks) + len(retryable_tracks)
-            track_uris = []
-
-            if total_tracks_to_search > 0:
-                search_task = progress.add_task("[cyan]Searching tracks on Spotify...", total=total_tracks_to_search)
-
-                # Search new tracks
-                for episode in fetched_episodes:
-                    ep_tracks = episode_tracks.get(episode.link, [])
-
-                    for track in ep_tracks:
-                        uri = spotify_manager.search_track(track)
-                        if uri:
-                            track_uris.append(uri)
-                        else:
-                            state.add_failed_track(track, episode.full_title)
-                        progress.update(search_task, advance=1)
-
-                    # Mark episode as processed and save
-                    state.mark_episode_processed(episode, len(ep_tracks))
-                    state.save()
-
-                # Retry failed tracks
-                retry_found = 0
-                for track_info in retryable_tracks:
-                    track = Track(artist=track_info['artist'], track=track_info['track'], query=track_info['query'])
-                    uri = spotify_manager.search_track(track)
-                    if uri:
-                        track_uris.append(uri)
-                        state.remove_failed_track(track_info['key'])
-                        retry_found += 1
-                    else:
-                        state.add_failed_track(track, "retry")
-                    progress.update(search_task, advance=1)
-
-                if retryable_tracks:
-                    state.save()
-
-                if retry_found > 0:
-                    console.print(f"[green]✓[/green] Found {retry_found} previously failed tracks!\n")
-
-                console.print(f"[green]✓[/green] Found {len(track_uris)}/{total_tracks_to_search} tracks on Spotify\n")
-
-            # Create or update playlist
-            playlist_id = spotify_manager.get_playlist_by_name(PLAYLIST_NAME)
-
-            if playlist_id:
-                console.print(f"[cyan]Found existing playlist:[/cyan] {PLAYLIST_NAME}")
-                existing_tracks = spotify_manager.get_playlist_tracks(playlist_id)
-                new_tracks = [uri for uri in track_uris if uri not in existing_tracks]
-
-                if new_tracks:
-                    console.print(f"[cyan]Adding {len(new_tracks)} new tracks...[/cyan]")
-                    num_added = spotify_manager.add_tracks_to_playlist(playlist_id, new_tracks)
-                    console.print(f"[green]✓[/green] Added {num_added} tracks to playlist")
-                else:
-                    console.print("[yellow]No new tracks to add[/yellow]")
-            else:
-                console.print(f"[cyan]Creating new playlist:[/cyan] {PLAYLIST_NAME}")
-                playlist_id = spotify_manager.create_playlist(
-                    name=PLAYLIST_NAME,
-                    description="Tracks from TGL (The Guestlist) podcast"
-                )
-                num_added = spotify_manager.add_tracks_to_playlist(playlist_id, track_uris)
-                console.print(f"[green]✓[/green] Created playlist and added {num_added} tracks")
-
-            playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
-            console.print(f"\n[bold green]✓ Done![/bold green] Playlist URL: [link={playlist_url}]{playlist_url}[/link]")
-
-    console.print("[bold cyan]" + "═" * 60 + "\n")
+    if not success:
+        raise typer.Exit(1)
 
 
 # Config command group

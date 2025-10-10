@@ -8,6 +8,7 @@ This module handles all Spotify operations including:
 
 import json
 import re
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import spotipy
@@ -368,8 +369,21 @@ class SpotifyManager:
         # Check cache first
         if search_key in self.state["tracks"]:
             cached = self.state["tracks"][search_key]
-            self._log_api_call("CACHE_HIT", f"{track.artist} - {track.title}")
-            return (cached["id"], cached["name"], cached["artists"])
+
+            # Check if this is a cache hit (has track id)
+            if "id" in cached:
+                self._log_api_call("CACHE_HIT", f"{track.artist} - {track.title}")
+                return (cached["id"], cached["name"], cached["artists"])
+
+            # This is a cached miss - check if it's still valid (less than 1 day old)
+            if "timestamp" in cached:
+                age_seconds = time.time() - cached["timestamp"]
+                if age_seconds < 86400:  # 86400 seconds = 1 day
+                    self._log_api_call("CACHE_MISS", f"{track.artist} - {track.title} (cached)")
+                    return None
+                else:
+                    # Miss is stale, search again
+                    self._log_api_call("CACHE_MISS_EXPIRED", f"{track.artist} - {track.title}")
 
         try:
             client = self._get_search_client()
@@ -390,11 +404,12 @@ class SpotifyManager:
                     track_name = track_data['name']
                     artists = [artist['name'] for artist in track_data['artists']]
 
-                    # Cache the result
+                    # Cache the result with timestamp
                     self.state["tracks"][search_key] = {
                         "id": track_id,
                         "name": track_name,
-                        "artists": artists
+                        "artists": artists,
+                        "timestamp": time.time()
                     }
                     self._save_state(tracks_only=True)
 
@@ -415,11 +430,12 @@ class SpotifyManager:
                     track_name = track_data['name']
                     artists = [artist['name'] for artist in track_data['artists']]
 
-                    # Cache the result
+                    # Cache the result with timestamp
                     self.state["tracks"][search_key] = {
                         "id": track_id,
                         "name": track_name,
-                        "artists": artists
+                        "artists": artists,
+                        "timestamp": time.time()
                     }
                     self._save_state(tracks_only=True)
 
@@ -442,11 +458,12 @@ class SpotifyManager:
                     track_name = track_data['name']
                     artists = [artist['name'] for artist in track_data['artists']]
 
-                    # Cache the result
+                    # Cache the result with timestamp
                     self.state["tracks"][search_key] = {
                         "id": track_id,
                         "name": track_name,
-                        "artists": artists
+                        "artists": artists,
+                        "timestamp": time.time()
                     }
                     self._save_state(tracks_only=True)
 
@@ -468,24 +485,39 @@ class SpotifyManager:
 
                         console.print(f"[yellow]  Note: Found with swapped artist/title[/yellow]")
 
-                        # Cache the result
+                        # Cache the result with timestamp
                         self.state["tracks"][search_key] = {
                             "id": track_id,
                             "name": track_name,
-                            "artists": artists
+                            "artists": artists,
+                            "timestamp": time.time()
                         }
                         self._save_state(tracks_only=True)
 
                         return (track_id, track_name, artists)
 
-            # No matching track found
+            # No matching track found - cache the miss with timestamp
             console.print(f"[yellow]⚠ Track not found:[/yellow] {track.artist} - {track.title}")
             if track.variant:
                 console.print(f"  [dim]Variant: {track.variant}[/dim]")
+
+            # Cache miss to avoid re-searching for 1 day
+            self.state["tracks"][search_key] = {
+                "timestamp": time.time()
+            }
+            self._save_state(tracks_only=True)
+
             return None
 
         except Exception as e:
             console.print(f"[red]Error searching track {track.artist} - {track.title}: {e}[/red]")
+
+            # Cache miss to avoid re-searching for 1 day
+            self.state["tracks"][search_key] = {
+                "timestamp": time.time()
+            }
+            self._save_state(tracks_only=True)
+
             return None
 
     def sync_episode_playlist(

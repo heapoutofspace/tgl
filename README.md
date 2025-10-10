@@ -87,7 +87,7 @@ export TGL_PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-to
 export TGL_SPOTIFY_CLIENT_ID=your_client_id
 export TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
 export TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
-export TGL_SPOTIFY_PLAYLIST_NAME=TGL
+# export TGL_SPOTIFY_PLAYLIST_NAME="The Sound of The Guestlist by Fear of Tigers"  # default
 ```
 
 **Option 3: .env file**
@@ -103,7 +103,7 @@ TGL_PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-token
 # TGL_SPOTIFY_CLIENT_ID=your_client_id
 # TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
 # TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
-# TGL_SPOTIFY_PLAYLIST_NAME=TGL
+# TGL_SPOTIFY_PLAYLIST_NAME=The Sound of The Guestlist by Fear of Tigers  # default
 
 # Optional: Override data directory location
 # TGL_DATA_DIR=/custom/path/to/data

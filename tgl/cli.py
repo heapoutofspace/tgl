@@ -975,7 +975,7 @@ def config_init():
         if spotify_uri:
             config_data["spotify_redirect_uri"] = spotify_uri
 
-        playlist_name = typer.prompt("Spotify Playlist Name", default="TGL")
+        playlist_name = typer.prompt("Spotify Playlist Name", default="The Sound of The Guestlist by Fear of Tigers")
         if playlist_name:
             config_data["spotify_playlist_name"] = playlist_name
 

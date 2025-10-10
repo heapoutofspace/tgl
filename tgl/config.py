@@ -199,7 +199,7 @@ class Settings(BaseSettings):
     )
 
     spotify_playlist_name: str = Field(
-        default='TGL',
+        default='The Sound of The Guestlist by Fear of Tigers',
         validation_alias=AliasChoices('TGL_SPOTIFY_PLAYLIST_NAME', 'SPOTIFY_PLAYLIST_NAME'),
         description="Default Spotify playlist name"
     )

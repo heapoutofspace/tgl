@@ -318,10 +318,25 @@ class PatreonPodcastFetcher:
         """Classify episode as TGL or BONUS based on title"""
         title_lower = title.lower()
 
+        # BONUS episode patterns (specific bonus content)
+        bonus_patterns = [
+            r'\bfrom the crates\b',
+            r'\bfrom the blogs\b',
+            r'\bfear of tigers\b',
+            r'\bre-?up\b',
+            r'\btrailer\b',
+            r'\binterview\b',
+        ]
+
+        for pattern in bonus_patterns:
+            if re.search(pattern, title_lower):
+                return 'BONUS'
+
         # TGL episode patterns
         tgl_patterns = [
             r'\btgl\b',
             r'\bguestlist\b',
+            r'\bg-?list\b',  # Catches both "guestlist" and "g-list"
             r'\bepisode\s+\d+',
             r'\be[\s:]*\d+',
         ]
@@ -330,8 +345,8 @@ class PatreonPodcastFetcher:
             if re.search(pattern, title_lower):
                 return 'TGL'
 
-        # Everything else is BONUS (From The Crates, Fear of Tigers, re-ups, etc.)
-        return 'BONUS'
+        # Default to TGL for ambiguous cases (most episodes are TGL)
+        return 'TGL'
 
     def assign_episode_id(self, title: str, episode_type: str, bonus_counter: int) -> str:
         """Assign episode ID based on type

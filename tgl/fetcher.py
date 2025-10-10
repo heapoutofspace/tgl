@@ -286,6 +286,11 @@ class PatreonPodcastFetcher:
                 if 'http' in line.lower() or 'www.' in line.lower():
                     continue
 
+                # Skip tracks with excessive character count (likely prose)
+                # Check character count excluding the variant which is already separated
+                if len(artist) > 70 or len(track_title) > 70:
+                    continue
+
                 # Skip prose (check artist part for prose indicators)
                 if not has_track_marker:
                     # Weak prose indicators - common words that can appear in artist names

@@ -5,7 +5,6 @@ from .models import Episode, TrackInfo, Track, parse_episode_id
 from .cache import MetadataCache
 from .search import SearchIndex
 from .fetcher import PatreonPodcastFetcher
-from .state import StateManager
 from .spotify import SpotifyManager
 
 __version__ = "0.1.0"
@@ -20,7 +19,6 @@ __all__ = [
     "MetadataCache",
     "SearchIndex",
     "PatreonPodcastFetcher",
-    "StateManager",
     "SpotifyManager",
     "paths",
     "TGLPaths",

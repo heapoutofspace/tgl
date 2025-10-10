@@ -284,8 +284,6 @@ Files stored:
 - `episodes.json` - Episode metadata cache
 - `search_index/` - Whoosh full-text search index
 - `spotify.json` - Spotify track cache, playlist state, and OAuth tokens
-- `state.json` - Processing state (production)
-- `state_dryrun.json` - Processing state (dryrun)
 
 ### Search Capabilities
 

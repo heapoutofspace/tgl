@@ -102,25 +102,6 @@ class TGLPaths:
         """Whoosh search index directory"""
         return self.data_dir / "search_index"
 
-    @property
-    def state_file(self) -> Path:
-        """Production state file"""
-        return self.data_dir / "state.json"
-
-    @property
-    def state_file_dryrun(self) -> Path:
-        """Dryrun state file"""
-        return self.data_dir / "state_dryrun.json"
-
-    @property
-    def spotify_cache(self) -> Path:
-        """Spotify OAuth token cache (DEPRECATED - now stored in spotify.json)
-
-        This property is kept for backward compatibility but is no longer used.
-        OAuth tokens are now stored in the oauth_token field of spotify.json.
-        """
-        return self.data_dir / ".spotify_cache"
-
     def __repr__(self) -> str:
         return f"TGLPaths(data_dir={self.data_dir}, config_file={self.config_file})"
 

@@ -8,7 +8,7 @@ from whoosh.fields import Schema, ID, TEXT, STORED
 from whoosh.qparser import MultifieldParser, OrGroup
 
 from .models import Episode
-from .paths import paths
+from .config import paths
 
 
 class SearchIndex:

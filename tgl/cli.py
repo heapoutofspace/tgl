@@ -16,7 +16,7 @@ from rich.text import Text
 import requests
 
 from tgl import (
-    Settings,
+    settings,
     MetadataCache,
     SearchIndex,
     PatreonPodcastFetcher,
@@ -34,9 +34,6 @@ app = typer.Typer(
     no_args_is_help=False,
     invoke_without_command=True
 )
-
-# Global settings instance
-settings = Settings()
 
 @app.callback()
 def main(ctx: typer.Context):

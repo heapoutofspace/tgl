@@ -8,7 +8,7 @@ from datetime import datetime
 from rich.console import Console
 
 from .models import Episode, Track
-from .paths import paths
+from .config import paths
 
 console = Console()
 

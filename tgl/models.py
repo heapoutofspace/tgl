@@ -1,108 +1,11 @@
-"""Pydantic models for TGL application"""
+"""Pydantic data models for TGL application
 
-from typing import List, Optional, Tuple
-from pathlib import Path
-from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource, TomlConfigSettingsSource
-from pydantic import AliasChoices
+This module contains only data models. Configuration management
+is handled in the config module.
+"""
 
-
-class Settings(BaseSettings):
-    """Application settings loaded from environment variables and config file
-
-    Priority order (highest to lowest):
-    1. Environment variables (TGL_ prefixed versions)
-    2. Environment variables (non-prefixed versions)
-    3. TOML config file (platform-specific location)
-    4. .env file (project directory)
-    5. Default values
-
-    Accepts both TGL_ prefixed and non-prefixed variable names for backward compatibility.
-    Prefixed versions take priority if both exist.
-    """
-    model_config = SettingsConfigDict(
-        env_file='.env',
-        env_file_encoding='utf-8',
-        extra='ignore',
-        toml_file=None,  # Will be set dynamically
-    )
-
-    @classmethod
-    def settings_customise_sources(
-        cls,
-        settings_cls: type[BaseSettings],
-        init_settings: PydanticBaseSettingsSource,
-        env_settings: PydanticBaseSettingsSource,
-        dotenv_settings: PydanticBaseSettingsSource,
-        file_secret_settings: PydanticBaseSettingsSource,
-    ) -> Tuple[PydanticBaseSettingsSource, ...]:
-        """Customize settings sources to add TOML config file support
-
-        Priority (highest to lowest):
-        1. Init settings (constructor arguments)
-        2. Environment variables
-        3. TOML config file
-        4. .env file
-        5. File secrets
-        """
-        # Import here to avoid circular dependency
-        from .paths import paths
-
-        toml_settings = None
-        if paths.config_file.exists():
-            toml_settings = TomlConfigSettingsSource(settings_cls, paths.config_file)
-
-        # Return sources in priority order
-        if toml_settings:
-            return (init_settings, env_settings, toml_settings, dotenv_settings, file_secret_settings)
-        else:
-            return (init_settings, env_settings, dotenv_settings, file_secret_settings)
-
-    # Patreon RSS feed URL
-    # Accepts: TGL_PATREON_RSS_URL or PATREON_RSS_URL
-    patreon_rss_url: str = Field(
-        ...,
-        validation_alias=AliasChoices('TGL_PATREON_RSS_URL', 'PATREON_RSS_URL'),
-        description="Patreon RSS feed URL with auth token"
-    )
-
-    # Spotify API credentials
-    # Accepts: TGL_SPOTIFY_CLIENT_ID or SPOTIFY_CLIENT_ID
-    spotify_client_id: str = Field(
-        ...,
-        validation_alias=AliasChoices('TGL_SPOTIFY_CLIENT_ID', 'SPOTIFY_CLIENT_ID'),
-        description="Spotify API client ID"
-    )
-
-    # Accepts: TGL_SPOTIFY_CLIENT_SECRET or SPOTIFY_CLIENT_SECRET
-    spotify_client_secret: str = Field(
-        ...,
-        validation_alias=AliasChoices('TGL_SPOTIFY_CLIENT_SECRET', 'SPOTIFY_CLIENT_SECRET'),
-        description="Spotify API client secret"
-    )
-
-    # Accepts: TGL_SPOTIFY_REDIRECT_URI or SPOTIFY_REDIRECT_URI
-    spotify_redirect_uri: str = Field(
-        default='http://127.0.0.1:8888/callback',
-        validation_alias=AliasChoices('TGL_SPOTIFY_REDIRECT_URI', 'SPOTIFY_REDIRECT_URI'),
-        description="Spotify OAuth redirect URI"
-    )
-
-    # Accepts: TGL_SPOTIFY_PLAYLIST_NAME or SPOTIFY_PLAYLIST_NAME
-    spotify_playlist_name: str = Field(
-        default='TGL',
-        validation_alias=AliasChoices('TGL_SPOTIFY_PLAYLIST_NAME', 'SPOTIFY_PLAYLIST_NAME'),
-        description="Default Spotify playlist name"
-    )
-
-    # Data directory override (environment variable only, not config file)
-    # Note: This must be set via environment variable or .env file before app starts
-    # It cannot be set in config file since paths are initialized before config loads
-    data_dir: Optional[str] = Field(
-        default=None,
-        validation_alias=AliasChoices('TGL_DATA_DIR', 'DATA_DIR'),
-        description="Override data directory location (env var only)"
-    )
+from typing import List, Optional
+from pydantic import BaseModel, Field
 
 
 class TrackInfo(BaseModel):

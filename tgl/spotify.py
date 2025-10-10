@@ -4,8 +4,8 @@ from typing import List, Optional
 import spotipy
 from spotipy.oauth2 import SpotifyOAuth
 
-from .models import Settings, Track
-from .paths import paths
+from .config import Settings, paths
+from .models import Track
 
 
 class SpotifyPlaylistManager:

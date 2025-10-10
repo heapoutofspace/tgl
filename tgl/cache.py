@@ -7,7 +7,7 @@ from datetime import datetime
 from rich.console import Console
 
 from .models import Episode
-from .paths import paths
+from .config import paths
 
 if TYPE_CHECKING:
     from .fetcher import PatreonPodcastFetcher

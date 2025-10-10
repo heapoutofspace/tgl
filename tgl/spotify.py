@@ -580,34 +580,39 @@ class SpotifyManager:
         console.print(f"[dim]Year: {year}[/dim]")
         console.print(f"[dim]Episodes: {len(year_episodes)}[/dim]")
 
-        # Collect all unique tracks (track key -> TrackInfo)
-        unique_tracks = {}
+        # Collect all unique tracks by artist|title (to minimize searches)
+        unique_by_name = {}
         total_tracks = 0
         for ep in year_episodes:
             for track in ep.tracklist:
                 total_tracks += 1
                 track_key = f"{track.artist.lower()}|{track.title.lower()}"
-                if track_key not in unique_tracks:
-                    unique_tracks[track_key] = track
+                if track_key not in unique_by_name:
+                    unique_by_name[track_key] = track
 
-        console.print(f"[dim]Unique tracks: {len(unique_tracks)} (from {total_tracks} total)[/dim]\n")
+        console.print(f"[dim]Tracks by name: {len(unique_by_name)} (from {total_tracks} total)[/dim]\n")
 
         # Search for all tracks
-        found_tracks = []
+        spotify_tracks = {}  # spotify_id -> (track_info, track_name, artists)
         missing_tracks = []
 
         console.print(f"[cyan]Searching for tracks on Spotify...[/cyan]")
-        for i, (track_key, track) in enumerate(unique_tracks.items(), 1):
+        for i, (track_key, track) in enumerate(unique_by_name.items(), 1):
             result = self.search_track(track)
             if result:
                 track_id, track_name, artists = result
-                found_tracks.append((track_id, track, track_name, artists))
-                console.print(f"  [{i}/{len(unique_tracks)}] [green]✓[/green] {track.artist} - {track.title}")
+                # Deduplicate by Spotify track ID
+                if track_id not in spotify_tracks:
+                    spotify_tracks[track_id] = (track, track_name, artists)
+                console.print(f"  [{i}/{len(unique_by_name)}] [green]✓[/green] {track.artist} - {track.title}")
             else:
                 missing_tracks.append(track)
-                console.print(f"  [{i}/{len(unique_tracks)}] [red]✗[/red] {track.artist} - {track.title}")
+                console.print(f"  [{i}/{len(unique_by_name)}] [red]✗[/red] {track.artist} - {track.title}")
 
-        console.print(f"\n[green]✓[/green] Found {len(found_tracks)}/{len(unique_tracks)} tracks on Spotify")
+        console.print(f"\n[green]✓[/green] Found {len(spotify_tracks)} unique tracks on Spotify (from {len(unique_by_name)} searches)")
+
+        # Convert to found_tracks format for backward compatibility
+        found_tracks = [(track_id, track, name, artists) for track_id, (track, name, artists) in spotify_tracks.items()]
 
         if missing_tracks:
             console.print(f"[yellow]⚠[/yellow] {len(missing_tracks)} tracks not found:\\n")
@@ -724,43 +729,61 @@ class SpotifyManager:
         console.print(f"\n[cyan]Processing all-tracks playlist:[/cyan] {playlist_name}")
         console.print(f"[dim]Episodes: {len(episodes_with_tracks)}[/dim]")
 
-        # Collect all tracks with their last appearance date
-        # track_key -> (TrackInfo, last_published_date)
-        track_appearances = {}
+        # First pass: collect all unique tracks by artist|title (to minimize searches)
+        unique_by_name = {}
         total_tracks = 0
 
         for ep in episodes_sorted:
             for track in ep.tracklist:
                 total_tracks += 1
                 track_key = f"{track.artist.lower()}|{track.title.lower()}"
-                # Only record first appearance (which is the latest since we're going newest to oldest)
-                if track_key not in track_appearances:
-                    track_appearances[track_key] = (track, ep.published)
+                if track_key not in unique_by_name:
+                    unique_by_name[track_key] = track
 
-        console.print(f"[dim]Unique tracks: {len(track_appearances)} (from {total_tracks} total)[/dim]\n")
+        console.print(f"[dim]Tracks by name: {len(unique_by_name)} (from {total_tracks} total)[/dim]\n")
 
-        # Sort tracks by last appearance (already done since we only kept first appearance from sorted list)
-        # Now create ordered list
-        ordered_tracks = [(track, date) for track, date in track_appearances.values()]
-        # They're already in the right order, but let's be explicit
-        ordered_tracks.sort(key=lambda x: x[1], reverse=True)
-
-        # Search for all tracks
-        found_tracks = []
-        missing_tracks = []
+        # Search for all tracks and build map: track_key -> spotify_id
+        track_key_to_spotify_id = {}
+        missing_track_keys = set()
 
         console.print(f"[cyan]Searching for tracks on Spotify...[/cyan]")
-        for i, (track, _) in enumerate(ordered_tracks, 1):
+        for i, (track_key, track) in enumerate(unique_by_name.items(), 1):
             result = self.search_track(track)
             if result:
                 track_id, track_name, artists = result
-                found_tracks.append(track_id)
-                console.print(f"  [{i}/{len(ordered_tracks)}] [green]✓[/green] {track.artist} - {track.title}")
+                track_key_to_spotify_id[track_key] = track_id
+                console.print(f"  [{i}/{len(unique_by_name)}] [green]✓[/green] {track.artist} - {track.title}")
             else:
-                missing_tracks.append(track)
-                console.print(f"  [{i}/{len(ordered_tracks)}] [red]✗[/red] {track.artist} - {track.title}")
+                missing_track_keys.add(track_key)
+                console.print(f"  [{i}/{len(unique_by_name)}] [red]✗[/red] {track.artist} - {track.title}")
 
-        console.print(f"\n[green]✓[/green] Found {len(found_tracks)}/{len(ordered_tracks)} tracks on Spotify")
+        # Second pass: track last appearance by Spotify ID
+        # spotify_id -> (TrackInfo, last_published_date)
+        spotify_appearances = {}
+
+        for ep in episodes_sorted:
+            for track in ep.tracklist:
+                track_key = f"{track.artist.lower()}|{track.title.lower()}"
+                # Skip tracks we couldn't find on Spotify
+                if track_key in missing_track_keys:
+                    continue
+
+                spotify_id = track_key_to_spotify_id.get(track_key)
+                if spotify_id and spotify_id not in spotify_appearances:
+                    # First time seeing this Spotify ID = most recent appearance
+                    spotify_appearances[spotify_id] = (track, ep.published)
+
+        console.print(f"\n[green]✓[/green] Found {len(spotify_appearances)} unique tracks on Spotify (from {len(unique_by_name)} searches)")
+
+        # Order tracks by last appearance date (most recent first)
+        ordered_tracks = [(spotify_id, track, date) for spotify_id, (track, date) in spotify_appearances.items()]
+        ordered_tracks.sort(key=lambda x: x[2], reverse=True)
+
+        # Extract track IDs in order
+        found_tracks = [spotify_id for spotify_id, _, _ in ordered_tracks]
+
+        # Build missing tracks list for display
+        missing_tracks = [unique_by_name[tk] for tk in missing_track_keys]
 
         if missing_tracks:
             console.print(f"[yellow]⚠[/yellow] {len(missing_tracks)} tracks not found:\\n")

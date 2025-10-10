@@ -339,6 +339,7 @@ class PatreonPodcastFetcher:
             r'\btrailer\b',
             r'\binterview\b',
             r'\bextra\b',  # "The Guestlist Extra" etc.
+            r'\blistening guide\b',  # "Echo Drop EP and listening guide" etc.
         ]
 
         for pattern in bonus_patterns:

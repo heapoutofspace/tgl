@@ -483,6 +483,7 @@ def spotify(
     years: Optional[List[int]] = typer.Option(None, "--year", help="Create playlist for all tracks from a year (can be used multiple times)"),
     all_tracks: bool = typer.Option(False, "--all", help="Create playlist with ALL tracks from all episodes"),
     dry_run: bool = typer.Option(False, "-n", "--dry-run", help="Dry run mode (no write operations)"),
+    verbose: bool = typer.Option(False, "-v", "--verbose", help="Show all Spotify API calls"),
 ):
     """Manage Spotify playlists for TGL episodes
 
@@ -505,7 +506,7 @@ def spotify(
 
     # Initialize Spotify manager
     from .spotify import SpotifyManager
-    spotify_manager = SpotifyManager(settings, dry_run=dry_run)
+    spotify_manager = SpotifyManager(settings, dry_run=dry_run, verbose=verbose)
 
     # If no options provided, just run authorization
     if not episodes and not years and not all_tracks:

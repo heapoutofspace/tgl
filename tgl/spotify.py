@@ -91,15 +91,17 @@ class IntegratedCacheHandler(CacheHandler):
 class SpotifyManager:
     """Manages Spotify operations with state persistence and smart caching"""
 
-    def __init__(self, settings: Settings, dry_run: bool = False):
+    def __init__(self, settings: Settings, dry_run: bool = False, verbose: bool = False):
         """Initialize Spotify manager
 
         Args:
             settings: Application settings with Spotify credentials
             dry_run: If True, no write operations are performed on Spotify
+            verbose: If True, log all Spotify API calls
         """
         self.settings = settings
         self.dry_run = dry_run
+        self.verbose = verbose
         self.state_file = paths.data_dir / "spotify.json"
         self.state = self._load_state()
 
@@ -127,10 +129,27 @@ class SpotifyManager:
             "oauth_token": None  # OAuth token cache for user authentication
         }
 
-    def _save_state(self):
-        """Save state to spotify.json"""
-        if self.dry_run:
-            return  # Don't save state in dry run mode
+    def _log_api_call(self, operation: str, details: str = ""):
+        """Log Spotify API call in verbose mode
+
+        Args:
+            operation: Type of operation (e.g., "SEARCH", "CREATE_PLAYLIST", "ADD_TRACKS")
+            details: Additional details about the operation
+        """
+        if self.verbose:
+            if details:
+                console.print(f"[dim]API: {operation} - {details}[/dim]")
+            else:
+                console.print(f"[dim]API: {operation}[/dim]")
+
+    def _save_state(self, tracks_only: bool = False):
+        """Save state to spotify.json
+
+        Args:
+            tracks_only: If True, only save track lookups (used in dry-run mode)
+        """
+        if self.dry_run and not tracks_only:
+            return  # Don't save playlist state in dry run mode
 
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
@@ -349,6 +368,7 @@ class SpotifyManager:
         # Check cache first
         if search_key in self.state["tracks"]:
             cached = self.state["tracks"][search_key]
+            self._log_api_call("CACHE_HIT", f"{track.artist} - {track.title}")
             return (cached["id"], cached["name"], cached["artists"])
 
         try:
@@ -360,6 +380,7 @@ class SpotifyManager:
                 query_parts[0] = f'track:"{track.title} {track.variant}"'
             query = " ".join(query_parts)
 
+            self._log_api_call("SEARCH", f"Strategy 1: {query[:60]}...")
             results = client.search(q=query, type='track', limit=5)
 
             # Try to find a matching track in the results
@@ -375,7 +396,7 @@ class SpotifyManager:
                         "name": track_name,
                         "artists": artists
                     }
-                    self._save_state()
+                    self._save_state(tracks_only=True)
 
                     return (track_id, track_name, artists)
 
@@ -385,6 +406,7 @@ class SpotifyManager:
             else:
                 simple_query = f"{track.artist} {track.title}"
 
+            self._log_api_call("SEARCH", f"Strategy 2: {simple_query[:60]}...")
             results = client.search(q=simple_query, type='track', limit=10)
 
             for track_data in results['tracks']['items']:
@@ -399,7 +421,7 @@ class SpotifyManager:
                         "name": track_name,
                         "artists": artists
                     }
-                    self._save_state()
+                    self._save_state(tracks_only=True)
 
                     return (track_id, track_name, artists)
 
@@ -411,6 +433,7 @@ class SpotifyManager:
             title_first = title_words[0] if title_words else track.title
 
             aggressive_query = f"{artist_clean} {title_first}"
+            self._log_api_call("SEARCH", f"Strategy 3: {aggressive_query[:60]}...")
             results = client.search(q=aggressive_query, type='track', limit=15)
 
             for track_data in results['tracks']['items']:
@@ -425,7 +448,7 @@ class SpotifyManager:
                         "name": track_name,
                         "artists": artists
                     }
-                    self._save_state()
+                    self._save_state(tracks_only=True)
 
                     return (track_id, track_name, artists)
 
@@ -433,6 +456,7 @@ class SpotifyManager:
             # Only try if both artist and title are substantial (not just a single word)
             if ' ' in track.artist or ' ' in track.title or len(track.artist) < 15:
                 swap_query = f"{track.title} {track.artist}"
+                self._log_api_call("SEARCH", f"Strategy 4: {swap_query[:60]}...")
                 results = client.search(q=swap_query, type='track', limit=10)
 
                 for track_data in results['tracks']['items']:
@@ -450,7 +474,7 @@ class SpotifyManager:
                             "name": track_name,
                             "artists": artists
                         }
-                        self._save_state()
+                        self._save_state(tracks_only=True)
 
                         return (track_id, track_name, artists)
 
@@ -558,6 +582,7 @@ class SpotifyManager:
         if not playlist_id:
             console.print(f"[cyan]Creating new playlist:[/cyan] {playlist_name}")
             client = self._get_user_client()
+            self._log_api_call("CREATE_PLAYLIST", f"{playlist_name}")
             playlist = client.user_playlist_create(
                 user=self._user_id,
                 name=playlist_name,
@@ -578,6 +603,7 @@ class SpotifyManager:
             batch_size = 100
             for i in range(0, len(tracks_to_add), batch_size):
                 batch = tracks_to_add[i:i + batch_size]
+                self._log_api_call("ADD_TRACKS", f"{len(batch)} tracks")
                 client.playlist_add_items(playlist_id, batch)
 
             console.print(f"[green]✓[/green] Added {len(tracks_to_add)} tracks")
@@ -729,6 +755,7 @@ class SpotifyManager:
         if not playlist_id:
             console.print(f"[cyan]Creating new playlist:[/cyan] {playlist_name}")
             client = self._get_user_client()
+            self._log_api_call("CREATE_PLAYLIST", f"{playlist_name}")
             playlist = client.user_playlist_create(
                 user=self._user_id,
                 name=playlist_name,
@@ -764,11 +791,13 @@ class SpotifyManager:
             # First batch replaces, subsequent batches append
             if track_ids:
                 first_batch = track_ids[:batch_size]
+                self._log_api_call("REPLACE_TRACKS", f"{len(first_batch)} tracks")
                 client.playlist_replace_items(playlist_id, first_batch)
 
                 # Add remaining tracks in batches
                 for i in range(batch_size, len(track_ids), batch_size):
                     batch = track_ids[i:i + batch_size]
+                    self._log_api_call("ADD_TRACKS", f"{len(batch)} tracks")
                     client.playlist_add_items(playlist_id, batch)
 
             console.print(f"[green]✓[/green] Playlist updated ({len(track_ids)} tracks)")
@@ -917,6 +946,7 @@ class SpotifyManager:
         if not playlist_id:
             console.print(f"[cyan]Creating new playlist:[/cyan] {playlist_name}")
             client = self._get_user_client()
+            self._log_api_call("CREATE_PLAYLIST", f"{playlist_name}")
             playlist = client.user_playlist_create(
                 user=self._user_id,
                 name=playlist_name,
@@ -952,11 +982,13 @@ class SpotifyManager:
             # First batch replaces, subsequent batches append
             if found_tracks:
                 first_batch = found_tracks[:batch_size]
+                self._log_api_call("REPLACE_TRACKS", f"{len(first_batch)} tracks")
                 client.playlist_replace_items(playlist_id, first_batch)
 
                 # Add remaining tracks in batches
                 for i in range(batch_size, len(found_tracks), batch_size):
                     batch = found_tracks[i:i + batch_size]
+                    self._log_api_call("ADD_TRACKS", f"{len(batch)} tracks")
                     client.playlist_add_items(playlist_id, batch)
 
             console.print(f"[green]✓[/green] Playlist updated ({len(found_tracks)} tracks)")

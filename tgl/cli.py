@@ -479,13 +479,19 @@ def download(episode_id: str):
 
 @app.command()
 def spotify(
-    episode: Optional[str] = typer.Option(None, "--episode", help="Create playlist for specific episode (e.g., E390)"),
+    episodes: Optional[List[str]] = typer.Option(None, "--episode", help="Create playlist for specific episode (can be used multiple times)"),
+    years: Optional[List[int]] = typer.Option(None, "--year", help="Create playlist for all tracks from a year (can be used multiple times)"),
+    all_tracks: bool = typer.Option(False, "--all", help="Create playlist with ALL tracks from all episodes"),
     dry_run: bool = typer.Option(False, "-n", "--dry-run", help="Dry run mode (no write operations)"),
 ):
     """Manage Spotify playlists for TGL episodes
 
     Run without arguments to authorize Spotify access.
-    Use --episode to create/update a playlist for a specific episode.
+    Multiple playlist options can be combined:
+
+      tgl spotify --episode E390 --year 2024 --all
+
+    This will create/update all three playlists in sequence.
     """
     # Check if Spotify credentials are configured
     if not settings.spotify_client_id or not settings.spotify_client_secret:
@@ -502,10 +508,13 @@ def spotify(
     spotify_manager = SpotifyManager(settings, dry_run=dry_run)
 
     # If no options provided, just run authorization
-    if not episode:
+    if not episodes and not years and not all_tracks:
         if spotify_manager.authorize():
             console.print("[green]✓ Spotify authorization successful[/green]")
-            console.print("[dim]You can now use Spotify commands like: [cyan]tgl spotify --episode E390[/cyan][/dim]\n")
+            console.print("[dim]You can now use Spotify commands like:[/dim]")
+            console.print("[dim]  [cyan]tgl spotify --episode E390[/cyan][/dim]")
+            console.print("[dim]  [cyan]tgl spotify --year 2024[/cyan][/dim]")
+            console.print("[dim]  [cyan]tgl spotify --all[/cyan][/dim]\n")
         raise typer.Exit(0)
 
     # Load episode cache
@@ -518,23 +527,54 @@ def spotify(
         console.print("[red]Error: Could not load episodes[/red]")
         raise typer.Exit(1)
 
-    # Parse episode ID
-    try:
-        episode_id = parse_episode_id(episode)
-    except ValueError as e:
-        console.print(f"[red]Error: {e}[/red]")
-        raise typer.Exit(1)
+    # Get all episodes as a list
+    all_episodes_list = cache.get_all_episodes()
 
-    # Get episode
-    ep = cache.get_episode(episode_id)
-    if not ep:
-        console.print(f"[red]Error: Episode {episode} not found[/red]")
-        raise typer.Exit(1)
+    # Track overall success
+    all_success = True
 
-    # Sync episode playlist
-    success = spotify_manager.sync_episode_playlist(ep, playlist_format=settings.spotify_episode_playlist_format)
+    # Process episode playlists
+    if episodes:
+        for episode_str in episodes:
+            try:
+                episode_id = parse_episode_id(episode_str)
+                ep = cache.get_episode(episode_id)
+                if not ep:
+                    console.print(f"[red]Error: Episode {episode_str} not found[/red]")
+                    all_success = False
+                    continue
 
-    if not success:
+                success = spotify_manager.sync_episode_playlist(
+                    ep,
+                    playlist_format=settings.spotify_episode_playlist_format
+                )
+                if not success:
+                    all_success = False
+            except ValueError as e:
+                console.print(f"[red]Error: {e}[/red]")
+                all_success = False
+
+    # Process year playlists
+    if years:
+        for year in years:
+            success = spotify_manager.sync_year_playlist(
+                year,
+                all_episodes_list,
+                playlist_format=settings.spotify_year_playlist_format
+            )
+            if not success:
+                all_success = False
+
+    # Process all-tracks playlist
+    if all_tracks:
+        success = spotify_manager.sync_all_playlist(
+            all_episodes_list,
+            playlist_format=settings.spotify_all_playlist_format
+        )
+        if not success:
+            all_success = False
+
+    if not all_success:
         raise typer.Exit(1)
 
 

@@ -196,6 +196,18 @@ class Settings(BaseSettings):
         description="Format for episode playlist names ({id} and {title} are replaced)"
     )
 
+    spotify_year_playlist_format: str = Field(
+        default='The Sound of The Guestlist by Fear of Tigers - {year}',
+        validation_alias=AliasChoices('TGL_SPOTIFY_YEAR_PLAYLIST_FORMAT', 'SPOTIFY_YEAR_PLAYLIST_FORMAT'),
+        description="Format for year playlist names ({year} is replaced)"
+    )
+
+    spotify_all_playlist_format: str = Field(
+        default='The Sound of The Guestlist by Fear of Tigers',
+        validation_alias=AliasChoices('TGL_SPOTIFY_ALL_PLAYLIST_FORMAT', 'SPOTIFY_ALL_PLAYLIST_FORMAT'),
+        description="Format for all-tracks playlist name"
+    )
+
     # Path overrides (documentation only - these are read directly by TGLPaths before Settings loads)
     data_dir: Optional[str] = Field(
         default=None,

@@ -548,3 +548,296 @@ class SpotifyManager:
         console.print(f"\n[bold green]✓ Done![/bold green] Playlist: [link={playlist_url}]{playlist_url}[/link]\n")
 
         return True
+
+    def sync_year_playlist(
+        self,
+        year: int,
+        episodes: List[Episode],
+        playlist_format: str = "The Sound of The Guestlist by Fear of Tigers - {year}"
+    ) -> bool:
+        """Create or update a playlist for all tracks from a specific year
+
+        Args:
+            year: Year to create playlist for
+            episodes: List of all episodes (will be filtered by year)
+            playlist_format: Format string for playlist name ({year} is replaced)
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Filter episodes for this year
+        year_episodes = [ep for ep in episodes if ep.year == year and ep.tracklist]
+
+        if not year_episodes:
+            console.print(f"[yellow]No episodes with tracklists found for {year}[/yellow]")
+            return False
+
+        # Generate playlist name
+        playlist_name = playlist_format.format(year=year)
+        playlist_key = f"year:{year}"
+
+        console.print(f"\n[cyan]Processing year playlist:[/cyan] {playlist_name}")
+        console.print(f"[dim]Year: {year}[/dim]")
+        console.print(f"[dim]Episodes: {len(year_episodes)}[/dim]")
+
+        # Collect all unique tracks (track key -> TrackInfo)
+        unique_tracks = {}
+        total_tracks = 0
+        for ep in year_episodes:
+            for track in ep.tracklist:
+                total_tracks += 1
+                track_key = f"{track.artist.lower()}|{track.title.lower()}"
+                if track_key not in unique_tracks:
+                    unique_tracks[track_key] = track
+
+        console.print(f"[dim]Unique tracks: {len(unique_tracks)} (from {total_tracks} total)[/dim]\n")
+
+        # Search for all tracks
+        found_tracks = []
+        missing_tracks = []
+
+        console.print(f"[cyan]Searching for tracks on Spotify...[/cyan]")
+        for i, (track_key, track) in enumerate(unique_tracks.items(), 1):
+            result = self.search_track(track)
+            if result:
+                track_id, track_name, artists = result
+                found_tracks.append((track_id, track, track_name, artists))
+                console.print(f"  [{i}/{len(unique_tracks)}] [green]✓[/green] {track.artist} - {track.title}")
+            else:
+                missing_tracks.append(track)
+                console.print(f"  [{i}/{len(unique_tracks)}] [red]✗[/red] {track.artist} - {track.title}")
+
+        console.print(f"\n[green]✓[/green] Found {len(found_tracks)}/{len(unique_tracks)} tracks on Spotify")
+
+        if missing_tracks:
+            console.print(f"[yellow]⚠[/yellow] {len(missing_tracks)} tracks not found:\\n")
+            for track in missing_tracks[:5]:
+                console.print(f"  • {track.artist} - {track.title}")
+            if len(missing_tracks) > 5:
+                console.print(f"  ... and {len(missing_tracks) - 5} more")
+
+        if not found_tracks:
+            console.print(f"\n[red]✗ No tracks found on Spotify[/red]")
+            return False
+
+        # Get track IDs
+        track_ids = [t[0] for t in found_tracks]
+
+        if self.dry_run:
+            console.print(f"\n[yellow]Dry run mode - playlist would be created/updated but no changes made[/yellow]")
+            return True
+
+        # Create or update playlist
+        console.print(f"\n[cyan]Syncing playlist...[/cyan]")
+
+        # Check if we've already created this playlist
+        playlist_id = None
+        if playlist_key in self.state["playlists"]:
+            playlist_id = self.state["playlists"][playlist_key]["id"]
+
+        # Verify playlist still exists on Spotify
+        if playlist_id:
+            try:
+                client = self._get_user_client()
+                client.playlist(playlist_id)
+            except:
+                console.print(f"[yellow]Playlist no longer exists, will create new one[/yellow]")
+                playlist_id = None
+
+        # Get existing tracks in playlist
+        existing_track_ids = set()
+        if playlist_id:
+            existing_track_ids = set(self.state["playlists"][playlist_key].get("tracks", []))
+
+        # Create playlist if it doesn't exist
+        if not playlist_id:
+            console.print(f"[cyan]Creating new playlist:[/cyan] {playlist_name}")
+            client = self._get_user_client()
+            playlist = client.user_playlist_create(
+                user=self._user_id,
+                name=playlist_name,
+                public=True,
+                description=f"All tracks from The Guestlist in {year}"
+            )
+            playlist_id = playlist['id']
+            console.print(f"[green]✓[/green] Created playlist")
+
+        # Determine which tracks to add
+        tracks_to_add = [tid for tid in track_ids if tid not in existing_track_ids]
+
+        if tracks_to_add:
+            console.print(f"[cyan]Adding {len(tracks_to_add)} new tracks to playlist...[/cyan]")
+            client = self._get_user_client()
+
+            # Add in batches of 100
+            batch_size = 100
+            for i in range(0, len(tracks_to_add), batch_size):
+                batch = tracks_to_add[i:i + batch_size]
+                client.playlist_add_items(playlist_id, batch)
+
+            console.print(f"[green]✓[/green] Added {len(tracks_to_add)} tracks")
+        else:
+            console.print(f"[yellow]Playlist already up to date[/yellow]")
+
+        # Update state
+        self.state["playlists"][playlist_key] = {
+            "id": playlist_id,
+            "name": playlist_name,
+            "tracks": track_ids
+        }
+        self._save_state()
+
+        playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+        console.print(f"\n[bold green]✓ Done![/bold green] Playlist: [link={playlist_url}]{playlist_url}[/link]\n")
+
+        return True
+
+    def sync_all_playlist(
+        self,
+        episodes: List[Episode],
+        playlist_format: str = "The Sound of The Guestlist by Fear of Tigers"
+    ) -> bool:
+        """Create or update a playlist with ALL tracks from all episodes
+
+        Tracks are deduplicated and ordered by last appearance (most recent first).
+
+        Args:
+            episodes: List of all episodes
+            playlist_format: Name for the playlist
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Filter episodes with tracklists
+        episodes_with_tracks = [ep for ep in episodes if ep.tracklist]
+
+        if not episodes_with_tracks:
+            console.print(f"[yellow]No episodes with tracklists found[/yellow]")
+            return False
+
+        # Sort episodes by date (most recent first) for determining last appearance
+        episodes_sorted = sorted(episodes_with_tracks, key=lambda e: e.published, reverse=True)
+
+        playlist_name = playlist_format
+        playlist_key = "all"
+
+        console.print(f"\n[cyan]Processing all-tracks playlist:[/cyan] {playlist_name}")
+        console.print(f"[dim]Episodes: {len(episodes_with_tracks)}[/dim]")
+
+        # Collect all tracks with their last appearance date
+        # track_key -> (TrackInfo, last_published_date)
+        track_appearances = {}
+        total_tracks = 0
+
+        for ep in episodes_sorted:
+            for track in ep.tracklist:
+                total_tracks += 1
+                track_key = f"{track.artist.lower()}|{track.title.lower()}"
+                # Only record first appearance (which is the latest since we're going newest to oldest)
+                if track_key not in track_appearances:
+                    track_appearances[track_key] = (track, ep.published)
+
+        console.print(f"[dim]Unique tracks: {len(track_appearances)} (from {total_tracks} total)[/dim]\n")
+
+        # Sort tracks by last appearance (already done since we only kept first appearance from sorted list)
+        # Now create ordered list
+        ordered_tracks = [(track, date) for track, date in track_appearances.values()]
+        # They're already in the right order, but let's be explicit
+        ordered_tracks.sort(key=lambda x: x[1], reverse=True)
+
+        # Search for all tracks
+        found_tracks = []
+        missing_tracks = []
+
+        console.print(f"[cyan]Searching for tracks on Spotify...[/cyan]")
+        for i, (track, _) in enumerate(ordered_tracks, 1):
+            result = self.search_track(track)
+            if result:
+                track_id, track_name, artists = result
+                found_tracks.append(track_id)
+                console.print(f"  [{i}/{len(ordered_tracks)}] [green]✓[/green] {track.artist} - {track.title}")
+            else:
+                missing_tracks.append(track)
+                console.print(f"  [{i}/{len(ordered_tracks)}] [red]✗[/red] {track.artist} - {track.title}")
+
+        console.print(f"\n[green]✓[/green] Found {len(found_tracks)}/{len(ordered_tracks)} tracks on Spotify")
+
+        if missing_tracks:
+            console.print(f"[yellow]⚠[/yellow] {len(missing_tracks)} tracks not found:\\n")
+            for track in missing_tracks[:5]:
+                console.print(f"  • {track.artist} - {track.title}")
+            if len(missing_tracks) > 5:
+                console.print(f"  ... and {len(missing_tracks) - 5} more")
+
+        if not found_tracks:
+            console.print(f"\n[red]✗ No tracks found on Spotify[/red]")
+            return False
+
+        if self.dry_run:
+            console.print(f"\n[yellow]Dry run mode - playlist would be created/updated but no changes made[/yellow]")
+            return True
+
+        # Create or update playlist
+        console.print(f"\n[cyan]Syncing playlist...[/cyan]")
+
+        # Check if we've already created this playlist
+        playlist_id = None
+        if playlist_key in self.state["playlists"]:
+            playlist_id = self.state["playlists"][playlist_key]["id"]
+
+        # Verify playlist still exists on Spotify
+        if playlist_id:
+            try:
+                client = self._get_user_client()
+                client.playlist(playlist_id)
+            except:
+                console.print(f"[yellow]Playlist no longer exists, will create new one[/yellow]")
+                playlist_id = None
+
+        # Get existing tracks in playlist
+        existing_track_ids = set()
+        if playlist_id:
+            existing_track_ids = set(self.state["playlists"][playlist_key].get("tracks", []))
+
+        # Create playlist if it doesn't exist
+        if not playlist_id:
+            console.print(f"[cyan]Creating new playlist:[/cyan] {playlist_name}")
+            client = self._get_user_client()
+            playlist = client.user_playlist_create(
+                user=self._user_id,
+                name=playlist_name,
+                public=True,
+                description="All tracks from The Guestlist podcast - ordered by most recent appearance"
+            )
+            playlist_id = playlist['id']
+            console.print(f"[green]✓[/green] Created playlist")
+
+        # Determine which tracks to add
+        tracks_to_add = [tid for tid in found_tracks if tid not in existing_track_ids]
+
+        if tracks_to_add:
+            console.print(f"[cyan]Adding {len(tracks_to_add)} new tracks to playlist...[/cyan]")
+            client = self._get_user_client()
+
+            # Add in batches of 100
+            batch_size = 100
+            for i in range(0, len(tracks_to_add), batch_size):
+                batch = tracks_to_add[i:i + batch_size]
+                client.playlist_add_items(playlist_id, batch)
+
+            console.print(f"[green]✓[/green] Added {len(tracks_to_add)} tracks")
+        else:
+            console.print(f"[yellow]Playlist already up to date[/yellow]")
+
+        # Update state
+        self.state["playlists"][playlist_key] = {
+            "id": playlist_id,
+            "name": playlist_name,
+            "tracks": found_tracks  # Store in order
+        }
+        self._save_state()
+
+        playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
+        console.print(f"\n[bold green]✓ Done![/bold green] Playlist: [link={playlist_url}]{playlist_url}[/link]\n")
+
+        return True

@@ -114,7 +114,11 @@ class TGLPaths:
 
     @property
     def spotify_cache(self) -> Path:
-        """Spotify OAuth token cache"""
+        """Spotify OAuth token cache (DEPRECATED - now stored in spotify.json)
+
+        This property is kept for backward compatibility but is no longer used.
+        OAuth tokens are now stored in the oauth_token field of spotify.json.
+        """
         return self.data_dir / ".spotify_cache"
 
     def __repr__(self) -> str:

@@ -283,9 +283,9 @@ Show all paths with: `tgl config path --all`
 Files stored:
 - `episodes.json` - Episode metadata cache
 - `search_index/` - Whoosh full-text search index
-- `state.json` - Spotify processing state (production)
-- `state_dryrun.json` - Dryrun state
-- `.spotify_cache` - Spotify OAuth tokens
+- `spotify.json` - Spotify track cache, playlist state, and OAuth tokens
+- `state.json` - Processing state (production)
+- `state_dryrun.json` - Processing state (dryrun)
 
 ### Search Capabilities
 
@@ -365,8 +365,9 @@ The project was migrated from a single-file uv script (`tgl.py`) to a proper Pyt
 - The tool will retry failed tracks after 7 days
 
 ### Authentication Issues
-- Delete Spotify cache file (see path with `tgl config path --all`)
-- Run `tgl spotify` again to re-authorize
+- OAuth tokens are stored in `spotify.json` (see path with `tgl config path --all`)
+- To re-authorize: delete the `oauth_token` field from `spotify.json` or delete the entire file
+- Run `tgl spotify` again to authorize with fresh credentials
 
 ### Import Errors
 - Make sure you've installed the package: `uv pip install -e .`

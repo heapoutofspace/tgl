@@ -791,9 +791,9 @@ def config_path(
         table.add_row("Data Directory", str(paths.data_dir))
         table.add_row("Episodes Cache", str(paths.episodes_cache))
         table.add_row("Search Index", str(paths.search_index_dir))
+        table.add_row("Spotify State", str(paths.data_dir / "spotify.json"))
         table.add_row("State File", str(paths.state_file))
         table.add_row("State File (Dryrun)", str(paths.state_file_dryrun))
-        table.add_row("Spotify Cache", str(paths.spotify_cache))
 
         console.print(table)
         console.print()

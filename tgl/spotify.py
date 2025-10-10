@@ -601,9 +601,11 @@ class SpotifyManager:
         self,
         year: int,
         episodes: List[Episode],
-        playlist_format: str = "The Sound of The Guestlist by Fear of Tigers - {year}"
+        playlist_format: str = "The {year} Sound of The Guestlist by Fear of Tigers"
     ) -> bool:
         """Create or update a playlist for all tracks from a specific year
+
+        Tracks are ordered by last appearance (most recent first), same as --all.
 
         Args:
             year: Year to create playlist for
@@ -620,6 +622,9 @@ class SpotifyManager:
             console.print(f"[yellow]No episodes with tracklists found for {year}[/yellow]")
             return False
 
+        # Sort episodes by date (most recent first) for determining last appearance
+        episodes_sorted = sorted(year_episodes, key=lambda e: e.published, reverse=True)
+
         # Generate playlist name
         playlist_name = playlist_format.format(year=year)
         playlist_key = f"year:{year}"
@@ -628,10 +633,10 @@ class SpotifyManager:
         console.print(f"[dim]Year: {year}[/dim]")
         console.print(f"[dim]Episodes: {len(year_episodes)}[/dim]")
 
-        # Collect all unique tracks by artist|title (to minimize searches)
+        # First pass: collect all unique tracks by artist|title (to minimize searches)
         unique_by_name = {}
         total_tracks = 0
-        for ep in year_episodes:
+        for ep in episodes_sorted:
             for track in ep.tracklist:
                 total_tracks += 1
                 track_key = f"{track.artist.lower()}|{track.title.lower()}"
@@ -640,27 +645,48 @@ class SpotifyManager:
 
         console.print(f"[dim]Tracks by name: {len(unique_by_name)} (from {total_tracks} total)[/dim]\n")
 
-        # Search for all tracks
-        spotify_tracks = {}  # spotify_id -> (track_info, track_name, artists)
-        missing_tracks = []
+        # Search for all tracks and build map: track_key -> spotify_id
+        track_key_to_spotify_id = {}
+        missing_track_keys = set()
 
         console.print(f"[cyan]Searching for tracks on Spotify...[/cyan]")
         for i, (track_key, track) in enumerate(unique_by_name.items(), 1):
             result = self.search_track(track)
             if result:
                 track_id, track_name, artists = result
-                # Deduplicate by Spotify track ID
-                if track_id not in spotify_tracks:
-                    spotify_tracks[track_id] = (track, track_name, artists)
+                track_key_to_spotify_id[track_key] = track_id
                 console.print(f"  [{i}/{len(unique_by_name)}] [green]✓[/green] {track.artist} - {track.title}")
             else:
-                missing_tracks.append(track)
+                missing_track_keys.add(track_key)
                 console.print(f"  [{i}/{len(unique_by_name)}] [red]✗[/red] {track.artist} - {track.title}")
 
-        console.print(f"\n[green]✓[/green] Found {len(spotify_tracks)} unique tracks on Spotify (from {len(unique_by_name)} searches)")
+        # Second pass: track last appearance by Spotify ID
+        # spotify_id -> (TrackInfo, last_published_date)
+        spotify_appearances = {}
 
-        # Convert to found_tracks format for backward compatibility
-        found_tracks = [(track_id, track, name, artists) for track_id, (track, name, artists) in spotify_tracks.items()]
+        for ep in episodes_sorted:
+            for track in ep.tracklist:
+                track_key = f"{track.artist.lower()}|{track.title.lower()}"
+                # Skip tracks we couldn't find on Spotify
+                if track_key in missing_track_keys:
+                    continue
+
+                spotify_id = track_key_to_spotify_id.get(track_key)
+                if spotify_id and spotify_id not in spotify_appearances:
+                    # First time seeing this Spotify ID = most recent appearance
+                    spotify_appearances[spotify_id] = (track, ep.published)
+
+        console.print(f"\n[green]✓[/green] Found {len(spotify_appearances)} unique tracks on Spotify (from {len(unique_by_name)} searches)")
+
+        # Order tracks by last appearance date (most recent first)
+        ordered_tracks = [(spotify_id, track, date) for spotify_id, (track, date) in spotify_appearances.items()]
+        ordered_tracks.sort(key=lambda x: x[2], reverse=True)
+
+        # Extract track IDs in order
+        track_ids = [spotify_id for spotify_id, _, _ in ordered_tracks]
+
+        # Build missing tracks list for display
+        missing_tracks = [unique_by_name[tk] for tk in missing_track_keys]
 
         if missing_tracks:
             console.print(f"[yellow]⚠[/yellow] {len(missing_tracks)} tracks not found:\\n")
@@ -669,12 +695,9 @@ class SpotifyManager:
             if len(missing_tracks) > 5:
                 console.print(f"  ... and {len(missing_tracks) - 5} more")
 
-        if not found_tracks:
+        if not track_ids:
             console.print(f"\n[red]✗ No tracks found on Spotify[/red]")
             return False
-
-        # Get track IDs
-        track_ids = [t[0] for t in found_tracks]
 
         if self.dry_run:
             console.print(f"\n[yellow]Dry run mode - playlist would be created/updated but no changes made[/yellow]")
@@ -697,10 +720,10 @@ class SpotifyManager:
                 console.print(f"[yellow]Playlist no longer exists, will create new one[/yellow]")
                 playlist_id = None
 
-        # Get existing tracks in playlist
-        existing_track_ids = set()
+        # Get existing tracks in playlist (as list to preserve order)
+        existing_track_ids = []
         if playlist_id:
-            existing_track_ids = set(self.state["playlists"][playlist_key].get("tracks", []))
+            existing_track_ids = self.state["playlists"][playlist_key].get("tracks", [])
 
         # Create playlist if it doesn't exist
         if not playlist_id:
@@ -710,25 +733,45 @@ class SpotifyManager:
                 user=self._user_id,
                 name=playlist_name,
                 public=True,
-                description=f"All tracks from The Guestlist in {year}"
+                description=f"All tracks from The Guestlist in {year}, ordered by last appearance"
             )
             playlist_id = playlist['id']
             console.print(f"[green]✓[/green] Created playlist")
 
-        # Determine which tracks to add
-        tracks_to_add = [tid for tid in track_ids if tid not in existing_track_ids]
+        # Check if we need to update the playlist
+        existing_set = set(existing_track_ids)
+        new_set = set(track_ids)
 
-        if tracks_to_add:
-            console.print(f"[cyan]Adding {len(tracks_to_add)} new tracks to playlist...[/cyan]")
+        # Check if there are new tracks or if order has changed
+        has_new_tracks = bool(new_set - existing_set)
+        order_changed = existing_track_ids != track_ids
+
+        needs_update = has_new_tracks or order_changed
+
+        if needs_update:
+            if has_new_tracks:
+                new_count = len(new_set - existing_set)
+                console.print(f"[cyan]Updating playlist: {new_count} new track(s)[/cyan]")
+            if order_changed and not has_new_tracks:
+                console.print(f"[cyan]Reordering playlist tracks[/cyan]")
+
             client = self._get_user_client()
 
-            # Add in batches of 100
+            # Replace all tracks with the correct order
+            # Spotify API limit: 100 tracks per request
             batch_size = 100
-            for i in range(0, len(tracks_to_add), batch_size):
-                batch = tracks_to_add[i:i + batch_size]
-                client.playlist_add_items(playlist_id, batch)
 
-            console.print(f"[green]✓[/green] Added {len(tracks_to_add)} tracks")
+            # First batch replaces, subsequent batches append
+            if track_ids:
+                first_batch = track_ids[:batch_size]
+                client.playlist_replace_items(playlist_id, first_batch)
+
+                # Add remaining tracks in batches
+                for i in range(batch_size, len(track_ids), batch_size):
+                    batch = track_ids[i:i + batch_size]
+                    client.playlist_add_items(playlist_id, batch)
+
+            console.print(f"[green]✓[/green] Playlist updated ({len(track_ids)} tracks)")
         else:
             console.print(f"[yellow]Playlist already up to date[/yellow]")
 
@@ -865,10 +908,10 @@ class SpotifyManager:
                 console.print(f"[yellow]Playlist no longer exists, will create new one[/yellow]")
                 playlist_id = None
 
-        # Get existing tracks in playlist
-        existing_track_ids = set()
+        # Get existing tracks in playlist (as list to preserve order)
+        existing_track_ids = []
         if playlist_id:
-            existing_track_ids = set(self.state["playlists"][playlist_key].get("tracks", []))
+            existing_track_ids = self.state["playlists"][playlist_key].get("tracks", [])
 
         # Create playlist if it doesn't exist
         if not playlist_id:
@@ -883,20 +926,40 @@ class SpotifyManager:
             playlist_id = playlist['id']
             console.print(f"[green]✓[/green] Created playlist")
 
-        # Determine which tracks to add
-        tracks_to_add = [tid for tid in found_tracks if tid not in existing_track_ids]
+        # Check if we need to update the playlist
+        existing_set = set(existing_track_ids)
+        new_set = set(found_tracks)
 
-        if tracks_to_add:
-            console.print(f"[cyan]Adding {len(tracks_to_add)} new tracks to playlist...[/cyan]")
+        # Check if there are new tracks or if order has changed
+        has_new_tracks = bool(new_set - existing_set)
+        order_changed = existing_track_ids != found_tracks
+
+        needs_update = has_new_tracks or order_changed
+
+        if needs_update:
+            if has_new_tracks:
+                new_count = len(new_set - existing_set)
+                console.print(f"[cyan]Updating playlist: {new_count} new track(s)[/cyan]")
+            if order_changed and not has_new_tracks:
+                console.print(f"[cyan]Reordering playlist tracks[/cyan]")
+
             client = self._get_user_client()
 
-            # Add in batches of 100
+            # Replace all tracks with the correct order
+            # Spotify API limit: 100 tracks per request
             batch_size = 100
-            for i in range(0, len(tracks_to_add), batch_size):
-                batch = tracks_to_add[i:i + batch_size]
-                client.playlist_add_items(playlist_id, batch)
 
-            console.print(f"[green]✓[/green] Added {len(tracks_to_add)} tracks")
+            # First batch replaces, subsequent batches append
+            if found_tracks:
+                first_batch = found_tracks[:batch_size]
+                client.playlist_replace_items(playlist_id, first_batch)
+
+                # Add remaining tracks in batches
+                for i in range(batch_size, len(found_tracks), batch_size):
+                    batch = found_tracks[i:i + batch_size]
+                    client.playlist_add_items(playlist_id, batch)
+
+            console.print(f"[green]✓[/green] Playlist updated ({len(found_tracks)} tracks)")
         else:
             console.print(f"[yellow]Playlist already up to date[/yellow]")
 

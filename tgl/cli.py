@@ -568,9 +568,9 @@ def download(
             if should_skip:
                 if not episode.duration and cached_path.exists() and MUTAGEN_AVAILABLE:
                     try:
-                        from mutagen.mp3 import MP3
-                        audio = MP3(cached_path)
-                        if audio.info and audio.info.length:
+                        from mutagen import File as MutagenFile
+                        audio = MutagenFile(cached_path)
+                        if audio is not None and audio.info and audio.info.length:
                             episode.duration = PatreonPodcastFetcher("")._format_duration(int(audio.info.length))
                             cache.add_episode(episode)
                             stats['durations'] += 1
@@ -656,9 +656,9 @@ def download(
                 # Extract duration from cached file if missing
                 if not episode.duration and MUTAGEN_AVAILABLE:
                     try:
-                        from mutagen.mp3 import MP3
-                        audio = MP3(cached_path)
-                        if audio.info and audio.info.length:
+                        from mutagen import File as MutagenFile
+                        audio = MutagenFile(cached_path)
+                        if audio is not None and audio.info and audio.info.length:
                             # Update episode duration
                             episode.duration = PatreonPodcastFetcher("")._format_duration(int(audio.info.length))
                             # Update in cache

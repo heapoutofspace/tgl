@@ -160,9 +160,11 @@ def list(
     # Apply type filters
     if tgl and not bonus:
         episodes = [ep for ep in episodes if ep.episode_type == 'TGL']
+        # Sort TGL episodes by episode number (ascending)
+        episodes.sort(key=lambda ep: ep.id)
     elif bonus and not tgl:
         episodes = [ep for ep in episodes if ep.episode_type == 'BONUS']
-    # If both or neither, show all
+    # If both or neither, show all (keep date sort)
 
     if not episodes:
         console.print(f"[yellow]No episodes found[/yellow]")

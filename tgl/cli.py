@@ -242,7 +242,7 @@ def list(
         filename = f"{episode.episode_id} - {episode.title}.mp3"
         filename = re.sub(r'[<>:"/\\|?*]', '', filename)
         dest_path = dest_dir / filename
-        download_status = "✓" if dest_path.exists() else "-"
+        download_status = "✅" if dest_path.exists() else "-"
 
         table.add_row(type_icon, clickable_id, episode.title, track_count, episode.published, duration, download_status)
 

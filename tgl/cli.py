@@ -10,12 +10,14 @@ import subprocess
 import tomllib
 import tomli_w
 import hashlib
+import asyncio
 from urllib.parse import urlparse, urlunparse
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.table import Table
 from rich.text import Text
 import requests
+import httpx
 
 from tgl import (
     settings,
@@ -499,32 +501,24 @@ def download(
     paths.bonus_episodes_dir.mkdir(parents=True, exist_ok=True)
 
     console.print(f"\n[bold cyan]Downloading {len(episodes_with_audio)} episode(s)[/bold cyan]")
+    console.print(f"[dim]Using up to 5 concurrent downloads[/dim]")
     if MUTAGEN_AVAILABLE:
         console.print("[dim]Duration metadata will be extracted from downloaded files[/dim]\n")
     else:
         console.print("[dim]Install mutagen to extract duration metadata[/dim]\n")
 
     # Download episodes with progress tracking
-    downloaded_count = 0
-    skipped_count = 0
-    linked_count = 0
-    failed_count = 0
-    durations_extracted = 0
+    stats = {
+        'downloaded': 0,
+        'skipped': 0,
+        'linked': 0,
+        'failed': 0,
+        'durations': 0
+    }
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-        console=console,
-    ) as progress:
-        overall_task = progress.add_task(
-            f"[cyan]Downloading episodes...",
-            total=len(episodes_with_audio)
-        )
-
-        for episode in episodes_with_audio:
+    async def download_episode(client: httpx.AsyncClient, episode, progress, overall_task, semaphore):
+        """Download a single episode asynchronously"""
+        async with semaphore:  # Limit concurrent downloads
             # Determine destination directory and filename
             if episode.episode_type == 'TGL':
                 dest_dir = paths.tgl_episodes_dir
@@ -542,8 +536,8 @@ def download(
             # Check if destination exists and we're not forcing
             if dest_path.exists() and not force:
                 progress.update(overall_task, advance=1, description=f"[yellow]Skipped {episode.episode_id}[/yellow]")
-                skipped_count += 1
-                continue
+                stats['skipped'] += 1
+                return
 
             # Download to cache if not already there
             needs_download = not cached_path.exists()
@@ -551,24 +545,22 @@ def download(
                 try:
                     progress.update(overall_task, description=f"[cyan]Downloading {episode.episode_id}...[/cyan]")
 
-                    response = requests.get(episode.audio_url, stream=True, timeout=30)
-                    response.raise_for_status()
+                    async with client.stream('GET', episode.audio_url, timeout=60.0) as response:
+                        response.raise_for_status()
 
-                    total_size = int(response.headers.get('content-length', 0))
+                        with open(cached_path, 'wb') as f:
+                            async for chunk in response.aiter_bytes(chunk_size=8192):
+                                f.write(chunk)
 
-                    with open(cached_path, 'wb') as f:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            f.write(chunk)
-
-                    downloaded_count += 1
+                    stats['downloaded'] += 1
 
                 except Exception as e:
                     progress.update(overall_task, description=f"[red]Failed {episode.episode_id}[/red]")
-                    failed_count += 1
+                    stats['failed'] += 1
                     if cached_path.exists():
                         cached_path.unlink()
                     progress.update(overall_task, advance=1)
-                    continue
+                    return
 
             # Create hard link from cache to destination
             try:
@@ -582,7 +574,7 @@ def download(
                 os.link(cached_path, dest_path)
 
                 if not needs_download:
-                    linked_count += 1
+                    stats['linked'] += 1
 
                 # Extract duration from cached file
                 if MUTAGEN_AVAILABLE:
@@ -594,31 +586,62 @@ def download(
                             episode.duration = PatreonPodcastFetcher("")._format_duration(int(audio.info.length))
                             # Update in cache
                             cache.add_episode(episode)
-                            durations_extracted += 1
+                            stats['durations'] += 1
                     except Exception:
                         pass  # Silently fail duration extraction
 
             except Exception as e:
                 progress.update(overall_task, description=f"[red]Failed to link {episode.episode_id}[/red]")
-                failed_count += 1
+                stats['failed'] += 1
 
             progress.update(overall_task, advance=1)
 
+    async def download_all():
+        """Download all episodes concurrently"""
+        async with httpx.AsyncClient(follow_redirects=True) as client:
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                TimeRemainingColumn(),
+                console=console,
+            ) as progress:
+                overall_task = progress.add_task(
+                    f"[cyan]Downloading episodes...",
+                    total=len(episodes_with_audio)
+                )
+
+                # Semaphore to limit concurrent downloads (max 5)
+                semaphore = asyncio.Semaphore(5)
+
+                # Create tasks for all episodes
+                tasks = [
+                    download_episode(client, episode, progress, overall_task, semaphore)
+                    for episode in episodes_with_audio
+                ]
+
+                # Run all downloads concurrently
+                await asyncio.gather(*tasks)
+
+    # Run the async download
+    asyncio.run(download_all())
+
     # Save cache to persist durations
-    if durations_extracted > 0:
+    if stats['durations'] > 0:
         cache.save()
 
     # Print summary
     console.print(f"\n[bold green]Download complete![/bold green]")
-    console.print(f"  Downloaded: {downloaded_count}")
-    if linked_count > 0:
-        console.print(f"  Linked from cache: {linked_count}")
-    if skipped_count > 0:
-        console.print(f"  Skipped (already exists): {skipped_count}")
-    if failed_count > 0:
-        console.print(f"  [red]Failed: {failed_count}[/red]")
-    if durations_extracted > 0:
-        console.print(f"  [cyan]Durations extracted: {durations_extracted}[/cyan]")
+    console.print(f"  Downloaded: {stats['downloaded']}")
+    if stats['linked'] > 0:
+        console.print(f"  Linked from cache: {stats['linked']}")
+    if stats['skipped'] > 0:
+        console.print(f"  Skipped (already exists): {stats['skipped']}")
+    if stats['failed'] > 0:
+        console.print(f"  [red]Failed: {stats['failed']}[/red]")
+    if stats['durations'] > 0:
+        console.print(f"  [cyan]Durations extracted: {stats['durations']}[/cyan]")
     console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]\n")
     console.print(f"[dim]Audio cache: {paths.audio_cache_dir}[/dim]\n")
 

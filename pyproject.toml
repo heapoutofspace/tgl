@@ -8,6 +8,7 @@ dependencies = [
     "feedparser==6.0.11",
     "spotipy==2.24.0",
     "requests==2.31.0",
+    "httpx>=0.27.0",
     "rich==13.7.1",
     "typer==0.15.3",
     "click==8.1.7",

@@ -427,6 +427,7 @@ class PatreonPodcastFetcher:
 
         # First priority: Re-upload patterns - these are BONUS even if they have TGL prefix
         # These are re-uploads or special compilations using old episode numbers
+        # NOTE: "best of" removed - annual best-of episodes are legitimate TGL episodes
         reupload_patterns = [
             r'\bback to school\b',  # "Back to School Classics" (re-upload)
             r'\bcareer\b',  # "My New Rap Career" (personal content re-upload)
@@ -435,7 +436,6 @@ class PatreonPodcastFetcher:
             r'\bpure fire edition\b',  # "PURE FIRE EDITION" (compilation re-upload)
             r'\bmark runs\b',  # Personal narrative content
             r'\brewind\b',  # "Rewind" episodes
-            r'\bbest of\b',  # "Best of" compilations
         ]
 
         for pattern in reupload_patterns:
@@ -448,10 +448,12 @@ class PatreonPodcastFetcher:
             r'\btgl\s+\d+',        # "TGL 227", "TGL 126"
             r'\btgl\s+e\d+',       # "TGL E390" etc.
             r'\btgl\s+episode\s+\d+',  # "TGL Episode 208"
-            r'\bguestlist\s*[:-]?\s*episode\s+\d+',  # "Guestlist: Episode 140"
+            r'\bgue[^-\s]*list\s*[:-]?\s*episode\s+\d+',  # "Guestlist: Episode 140", "Gueslist - Episode 100" (typo-tolerant)
             r'\bg-?list\s*[:-]?\s*episode\s+\d+',    # "G-list - Episode 95"
             r'\bguestlist\s+\d+',  # "The Guestlist 47"
             r'\bg-?list\s+\d+',    # "G-list 95"
+            r'\(e\d+\)',           # "(e117)" - episode number in parentheses
+            r'\be\d{3,}\b',        # "E187", "E117" - three or more digits (likely TGL, not random E prefix)
         ]
 
         for pattern in clear_tgl_patterns:
@@ -494,9 +496,9 @@ class PatreonPodcastFetcher:
             if re.search(pattern, title_lower):
                 return 'TGL'
 
-        # If title has E### but no TGL keywords, it's likely BONUS
-        # (these are often bonus episodes using the same numbering)
-        if re.search(r'\be[\s:]*\d+', title_lower):
+        # If title has E## (2 digits or less) but no TGL keywords, it's likely BONUS
+        # (E### with 3+ digits is already handled above as TGL)
+        if re.search(r'\be[\s:]*\d{1,2}\b', title_lower):
             return 'BONUS'
 
         # Default to BONUS for ambiguous cases (safer to not overwrite TGL episodes)

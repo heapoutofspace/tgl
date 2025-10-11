@@ -99,30 +99,10 @@ def update_cache():
     cache = MetadataCache()
     fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        console=console,
-    ) as progress:
-        task = progress.add_task("[cyan]Fetching episodes from RSS feed...", total=None)
-        episodes = fetcher.fetch_episodes()
-        progress.update(task, completed=True, total=1)
+    # Use refresh() method which handles deduplication and reclassification
+    cache.refresh(fetcher)
 
-    console.print(f"[green]✓[/green] Fetched {len(episodes)} episodes\n")
-
-    # Update cache
-    for episode in episodes:
-        cache.add_episode(episode)
-
-    cache.save()
-
-    # Build search index
-    console.print("[cyan]Building search index...[/cyan]")
-    search_index = SearchIndex(cache.cache_dir)
-    search_index.build_index(cache.episodes)
-    console.print(f"[green]✓[/green] Search index built\n")
-
-    console.print(f"[bold green]✓ Done![/bold green] Cached {len(episodes)} episodes")
+    console.print(f"[bold green]✓ Done![/bold green] Cached {len(cache.episodes)} episodes")
     console.print("[bold cyan]" + "═" * 60 + "\n")
 
 # Aliases for backward compatibility and convenience

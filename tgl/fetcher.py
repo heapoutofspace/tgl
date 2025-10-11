@@ -80,8 +80,9 @@ class PatreonPodcastFetcher:
         """
         # First priority: explicit "Episode ###" patterns in title text
         explicit_patterns = [
-            r'(?:The\s+)?Gue[^-\s]*list\s*-?\s*Episode\s+(\d+)',  # The Guestlist - Episode 300 (handles typos like "Gueslist")
-            r'(?:The\s+)?G-?list\s*-?\s*Episode\s+(\d+)',    # G-list - Episode 95, Guestlist - Episode 299
+            r'(?:The\s+)?Gue[^-\s]*list\s*[:-]?\s*Episode\s+(\d+)',  # The Guestlist - Episode 300, The Guestlist: Episode 140
+            r'(?:The\s+)?G-?list\s*[:-]?\s*Episode\s+(\d+)',    # G-list - Episode 95, Guestlist: Episode 299
+            r'TGL\s+Episode\s+(\d+)',                  # TGL Episode 208
             r'^Episode\s+(\d+)',                       # Episode 300 (at start of title)
         ]
 
@@ -413,50 +414,83 @@ class PatreonPodcastFetcher:
         return inferred
 
     def classify_episode_type(self, title: str) -> str:
-        """Classify episode as TGL or BONUS based on title"""
+        """Classify episode as TGL or BONUS based on title
+
+        Priority order:
+        1. Check for re-upload patterns (highest priority - these are BONUS even with TGL prefix)
+        2. Check for clear TGL indicators (with episode numbers)
+        3. Check for BONUS-only patterns
+        4. Check for broader TGL patterns
+        5. Default to BONUS
+        """
         title_lower = title.lower()
 
-        # BONUS episode patterns (specific bonus content)
-        bonus_patterns = [
-            r'\bfrom the crates\b',
-            r'\bfrom the blogs\b',
+        # First priority: Re-upload patterns - these are BONUS even if they have TGL prefix
+        # These are re-uploads or special compilations using old episode numbers
+        reupload_patterns = [
+            r'\bback to school\b',  # "Back to School Classics" (re-upload)
+            r'\bcareer\b',  # "My New Rap Career" (personal content re-upload)
+            r'\bstays in\b',  # Travel content
+            r'stormagg?ed[eo]+n',  # "STORMAGGEDEON" or "STORMAGGEDDON" (special themed re-upload)
+            r'\bpure fire edition\b',  # "PURE FIRE EDITION" (compilation re-upload)
+            r'\bmark runs\b',  # Personal narrative content
+            r'\brewind\b',  # "Rewind" episodes
+            r'\bbest of\b',  # "Best of" compilations
+        ]
+
+        for pattern in reupload_patterns:
+            if re.search(pattern, title_lower):
+                return 'BONUS'
+
+        # Second priority: Clear TGL episode patterns with numbers
+        # These take precedence over general content keywords
+        clear_tgl_patterns = [
+            r'\btgl\s+\d+',        # "TGL 227", "TGL 126"
+            r'\btgl\s+e\d+',       # "TGL E390" etc.
+            r'\btgl\s+episode\s+\d+',  # "TGL Episode 208"
+            r'\bguestlist\s*[:-]?\s*episode\s+\d+',  # "Guestlist: Episode 140"
+            r'\bg-?list\s*[:-]?\s*episode\s+\d+',    # "G-list - Episode 95"
+            r'\bguestlist\s+\d+',  # "The Guestlist 47"
+            r'\bg-?list\s+\d+',    # "G-list 95"
+        ]
+
+        for pattern in clear_tgl_patterns:
+            if re.search(pattern, title_lower):
+                return 'TGL'
+
+        # Third priority: BONUS-only patterns (not TGL episodes)
+        # These are content types that are never TGL episodes
+        bonus_only_patterns = [
             r'\bfear of tigers\b',
             r'\bfot\b',  # Fear of Tigers abbreviation
-            r'\bre-?up\b',
             r'\btrailer\b',
-            r'\binterview\b',
             r'\bextra\b',  # "The Guestlist Extra" etc.
             r'\blistening guide\b',  # "Echo Drop EP and listening guide" etc.
             r'\brunners?\s+club\b',  # "Runners Club" or "Runner Club"
-            r'\brewind\b',  # "TGL Rewind", "Bloghouse Rewind"
             r'\bre-?edit\b',  # Re-edits
-            r'\bremix\b',  # Standalone remixes
             r'\bguestmix\b',  # Guest mixes
             r'\boriginal music\b',  # Original music releases
             r'\bnew song\b',  # New song announcements
             r'\balbum\b',  # Album announcements/releases
             r'\bcossus\b',  # "Cossus" series (production music)
             r'\bmaking of\b',  # "Making of" episodes
-            r'\bclassics\b',  # "Back to School Classics" and other classic compilations
-            r'\bbest of\b',  # "Best of 2019" compilations
-            r'\bcareer\b',  # Personal content like "My New Rap Career"
-            r'\bstays in\b',  # Travel content like "What goes on in Buda stays in Buda"
+            r'\bre-?up\b',
+            r'\binterview\b',
         ]
 
-        for pattern in bonus_patterns:
+        for pattern in bonus_only_patterns:
             if re.search(pattern, title_lower):
                 return 'BONUS'
 
-        # TGL episode patterns - require TGL/Guestlist/G-list keywords
-        # Don't classify as TGL based solely on E### pattern
-        tgl_patterns = [
-            r'\btgl\s+e\d+',  # "TGL E390" etc.
+        # Third priority: Broader TGL patterns without requiring numbers
+        # (for episodes that might not have clear numbering)
+        broad_tgl_patterns = [
+            r'\btgl\b',
             r'\bguestlist\b',
-            r'\bg-?list\b',  # Catches both "guestlist" and "g-list"
-            r'\bepisode\s+\d+',  # "Episode 300"
+            r'\bg-?list\b',
         ]
 
-        for pattern in tgl_patterns:
+        for pattern in broad_tgl_patterns:
             if re.search(pattern, title_lower):
                 return 'TGL'
 

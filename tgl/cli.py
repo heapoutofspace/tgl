@@ -239,10 +239,27 @@ def list(
         else:
             dest_dir = paths.bonus_episodes_dir
 
-        filename = f"{episode.episode_id} - {episode.title}.mp3"
+        # Determine correct file extension from audio URL
+        file_extension = '.mp3'  # default
+        if episode.audio_url:
+            cached_path = _get_cached_audio_path(episode.audio_url)
+            file_extension = cached_path.suffix or '.mp3'
+
+        filename = f"{episode.episode_id} - {episode.title}{file_extension}"
         filename = re.sub(r'[<>:"/\\|?*]', '', filename)
         dest_path = dest_dir / filename
-        download_status = "✅" if dest_path.exists() else "-"
+
+        # Check with correct extension first, fall back to .mp3 for legacy files
+        if dest_path.exists():
+            download_status = "✅"
+        elif file_extension != '.mp3':
+            # Check if old .mp3 version exists
+            legacy_filename = f"{episode.episode_id} - {episode.title}.mp3"
+            legacy_filename = re.sub(r'[<>:"/\\|?*]', '', legacy_filename)
+            legacy_path = dest_dir / legacy_filename
+            download_status = "✅" if legacy_path.exists() else "-"
+        else:
+            download_status = "-"
 
         table.add_row(type_icon, clickable_id, episode.title, track_count, episode.published, duration, download_status)
 
@@ -532,19 +549,21 @@ def download(
     async def download_episode(client: httpx.AsyncClient, episode, progress, overall_task, semaphore):
         """Download a single episode asynchronously"""
         async with semaphore:  # Limit concurrent downloads
-            # Determine destination directory and filename
+            # Determine destination directory
             if episode.episode_type == 'TGL':
                 dest_dir = paths.tgl_episodes_dir
             else:
                 dest_dir = paths.bonus_episodes_dir
 
-            filename = f"{episode.episode_id} - {episode.title}.mp3"
+            # Get cached file path to determine actual file extension
+            cached_path = _get_cached_audio_path(episode.audio_url)
+            file_extension = cached_path.suffix or '.mp3'
+
+            # Build filename with correct extension
+            filename = f"{episode.episode_id} - {episode.title}{file_extension}"
             # Clean filename of invalid characters
             filename = re.sub(r'[<>:"/\\|?*]', '', filename)
             dest_path = dest_dir / filename
-
-            # Get cached file path
-            cached_path = _get_cached_audio_path(episode.audio_url)
 
             # Check if we should skip (destination exists and file is correct)
             should_skip = False

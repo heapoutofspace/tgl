@@ -754,9 +754,11 @@ def doctor():
     if missing_episodes:
         console.print(f"[yellow]Found {len(missing_episodes)} missing episode(s):[/yellow]\n")
         for ep in missing_episodes:
-            console.print(f"  • {ep.episode_id} - {ep.title}")
-            console.print(f"    [dim]Published: {ep.published}[/dim]")
-            console.print(f"    [dim]Link: {ep.link}[/dim]\n")
+            from rich.text import Text
+            episode_id_link = Text(ep.episode_id)
+            episode_id_link.stylize(f"link {ep.link}")
+            console.print("  • ", episode_id_link, f" - {ep.title}", sep="")
+            console.print(f"    [dim]Published: {ep.published}[/dim]\n")
         console.print("[dim]Run 'tgl fetch' to update the metadata cache[/dim]\n")
     else:
         console.print("[green]✓ All RSS episodes are present in metadata cache[/green]\n")
@@ -770,6 +772,7 @@ def doctor():
         console.print(f"[yellow]Found {len(gaps)} gap(s) in TGL episode numbering:[/yellow]\n")
 
         for gap in gaps:
+            from rich.text import Text
             before = gap['before']
             after = gap['after']
             missing = gap['missing_numbers']
@@ -783,15 +786,25 @@ def doctor():
                 missing_str = f"E{missing[0]}-E{missing[-1]} ({len(missing)} episodes)"
 
             console.print(f"[bold cyan]Missing: {missing_str}[/bold cyan]")
-            console.print(f"[dim]  Before:[/dim] {before.episode_id} - {before.title[:50]}")
+
+            # Before episode with clickable link
+            before_link = Text(before.episode_id)
+            before_link.stylize(f"link {before.link}")
+            console.print("[dim]  Before:[/dim] ", before_link, f" - {before.title[:50]}", sep="")
             console.print(f"[dim]         Published: {before.published}[/dim]")
-            console.print(f"[dim]  After:[/dim]  {after.episode_id} - {after.title[:50]}")
+
+            # After episode with clickable link
+            after_link = Text(after.episode_id)
+            after_link.stylize(f"link {after.link}")
+            console.print("[dim]  After:[/dim]  ", after_link, f" - {after.title[:50]}", sep="")
             console.print(f"[dim]         Published: {after.published}[/dim]")
 
             if in_between:
                 console.print(f"\n  [yellow]Published in between ({len(in_between)} episode(s)):[/yellow]")
                 for ep in in_between:
-                    console.print(f"    • {ep.episode_id} ({ep.episode_type}) - {ep.title[:50]}")
+                    ep_link = Text(ep.episode_id)
+                    ep_link.stylize(f"link {ep.link}")
+                    console.print("    • ", ep_link, f" ({ep.episode_type}) - {ep.title[:50]}", sep="")
                     console.print(f"      [dim]Published: {ep.published}[/dim]")
             else:
                 console.print(f"\n  [dim]No episodes published in between[/dim]")
@@ -822,7 +835,7 @@ def doctor():
     # Collect all tracks without Spotify IDs, grouped by episode
     episodes_with_missing = []
 
-    for episode in sorted(cache.get_all_episodes(), key=lambda e: e.published):
+    for episode in sorted(cache.get_all_episodes(), key=lambda e: e.id):
         if not episode.tracklist:
             continue
 
@@ -850,6 +863,7 @@ def doctor():
             })
 
     if episodes_with_missing:
+        from rich.text import Text
         total_missing = sum(len(item['missing']) for item in episodes_with_missing)
         console.print(f"[yellow]Found {total_missing} track(s) without Spotify IDs across {len(episodes_with_missing)} episode(s):[/yellow]\n")
 
@@ -857,7 +871,10 @@ def doctor():
             episode = item['episode']
             missing = item['missing']
 
-            console.print(f"[bold cyan]{episode.episode_id}[/bold cyan] - {episode.title}")
+            # Create clickable episode ID
+            episode_id_link = Text(episode.episode_id, style="bold cyan")
+            episode_id_link.stylize(f"link {episode.link}")
+            console.print(episode_id_link, f" - {episode.title}", sep="")
             console.print(f"[dim]  Published: {episode.published}[/dim]")
             console.print(f"[dim]  Missing: {len(missing)}/{len(episode.tracklist)} tracks[/dim]\n")
 

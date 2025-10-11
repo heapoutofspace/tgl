@@ -527,6 +527,20 @@ class PatreonPodcastFetcher:
             # BONUS episodes get B prefix
             return f"B{bonus_counter:02d}"
 
+    def _format_duration(self, seconds: int) -> str:
+        """Format duration in seconds to HH:MM:SS or MM:SS format"""
+        if not seconds or seconds <= 0:
+            return None
+
+        hours = seconds // 3600
+        minutes = (seconds % 3600) // 60
+        secs = seconds % 60
+
+        if hours > 0:
+            return f"{hours}:{minutes:02d}:{secs:02d}"
+        else:
+            return f"{minutes}:{secs:02d}"
+
     def fetch_episodes(self, limit: Optional[int] = None) -> List[Episode]:
         """Fetch episodes from the RSS feed"""
         try:
@@ -564,10 +578,28 @@ class PatreonPodcastFetcher:
                     year = published_parsed.tm_year
                     published = time.strftime('%Y-%m-%d', published_parsed)
 
-                # Get audio URL
+                # Get audio URL and duration
                 audio_url = None
+                duration = None
                 if hasattr(entry, 'enclosures') and entry.enclosures:
                     audio_url = entry.enclosures[0].get('href')
+
+                # Try to get duration from itunes:duration or enclosure length
+                if hasattr(entry, 'itunes_duration'):
+                    # itunes_duration can be in HH:MM:SS format or seconds
+                    duration_value = entry.itunes_duration
+                    if ':' in str(duration_value):
+                        # Already formatted
+                        duration = duration_value
+                    else:
+                        # Convert seconds to formatted string
+                        try:
+                            duration = self._format_duration(int(duration_value))
+                        except (ValueError, TypeError):
+                            pass
+
+                # Fallback: try to get from enclosure length (usually in bytes, not seconds)
+                # This is less reliable, so we skip it for now
 
                 # Get full description
                 raw_description = entry.get('description', '') or entry.get('summary', '')
@@ -586,6 +618,7 @@ class PatreonPodcastFetcher:
                     'year': year,
                     'link': entry.get('link', ''),
                     'audio_url': audio_url,
+                    'duration': duration,
                     'description': raw_description,
                     'description_text': description_text,
                     'tracklist': tracklist
@@ -642,7 +675,8 @@ class PatreonPodcastFetcher:
                     year=ep_data['year'],
                     link=ep_data['link'],
                     audio_url=ep_data['audio_url'],
-                    episode_type=episode_type
+                    episode_type=episode_type,
+                    duration=ep_data['duration']
                 )
                 episodes.append(episode)
 

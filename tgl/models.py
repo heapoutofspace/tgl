@@ -29,6 +29,7 @@ class Episode(BaseModel):
     link: str
     audio_url: Optional[str] = None
     episode_type: str = 'TGL'  # 'TGL' or 'BONUS'
+    duration: Optional[str] = None  # Episode duration (e.g., "1:23:45" or "45:30")
 
     def model_post_init(self, __context):
         """Set default episode_id if not provided (for backward compatibility)"""

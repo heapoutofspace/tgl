@@ -212,6 +212,7 @@ def list(
     table.add_column("Title", style="white", no_wrap=False, overflow="fold")
     table.add_column("Tracks", style="dim", justify="center", width=6)
     table.add_column("Date", style="yellow", width=12)
+    table.add_column("Duration", style="cyan", justify="right", width=8)
 
     for episode in episodes:
         # Create clickable episode ID
@@ -224,7 +225,10 @@ def list(
         # Get track count
         track_count = str(len(episode.tracklist)) if episode.tracklist else "-"
 
-        table.add_row(type_icon, clickable_id, episode.title, track_count, episode.published)
+        # Get duration
+        duration = episode.duration if episode.duration else "-"
+
+        table.add_row(type_icon, clickable_id, episode.title, track_count, episode.published, duration)
 
     console.print(table)
     console.print(f"\n[dim]Total: {len(episodes)} episodes[/dim]")
@@ -296,7 +300,8 @@ def info(episode_id: str):
     # Display episode info with clickable ID
     clickable_id = f"[link={episode.link}]{episode.episode_id}[/link]"
     console.print(f"\n[bold cyan]{clickable_id}:[/bold cyan] [bold white]{episode.title}[/bold white]")
-    console.print(f"[dim]Published: {episode.published}[/dim]")
+    duration_info = f" | Duration: {episode.duration}" if episode.duration else ""
+    console.print(f"[dim]Published: {episode.published}{duration_info}[/dim]")
 
     # Display description text
     if episode.description_text:
@@ -774,7 +779,8 @@ def doctor(
                 episode_id_link = Text(ep.episode_id)
                 episode_id_link.stylize(f"link {ep.link}")
                 console.print("  • ", episode_id_link, f" - {ep.title}", sep="")
-                console.print(f"    [dim]Published: {ep.published}[/dim]\n")
+                duration_info = f" | Duration: {ep.duration}" if ep.duration else ""
+                console.print(f"    [dim]Published: {ep.published}{duration_info}[/dim]\n")
             console.print("[dim]Run 'tgl fetch' to update the metadata cache[/dim]\n")
         else:
             console.print("[green]✓ All RSS episodes are present in metadata cache[/green]\n")
@@ -808,13 +814,15 @@ def doctor(
                 before_link = Text(before.episode_id)
                 before_link.stylize(f"link {before.link}")
                 console.print("[dim]  Before:[/dim] ", before_link, f" - {before.title}", sep="")
-                console.print(f"[dim]         Published: {before.published}[/dim]")
+                before_duration = f" | Duration: {before.duration}" if before.duration else ""
+                console.print(f"[dim]         Published: {before.published}{before_duration}[/dim]")
 
                 # After episode with clickable link
                 after_link = Text(after.episode_id)
                 after_link.stylize(f"link {after.link}")
                 console.print("[dim]  After:[/dim]  ", after_link, f" - {after.title}", sep="")
-                console.print(f"[dim]         Published: {after.published}[/dim]")
+                after_duration = f" | Duration: {after.duration}" if after.duration else ""
+                console.print(f"[dim]         Published: {after.published}{after_duration}[/dim]")
 
                 if in_between:
                     console.print(f"\n  [yellow]Published in between ({len(in_between)} episode(s)):[/yellow]")
@@ -822,7 +830,8 @@ def doctor(
                         ep_link = Text(ep.episode_id)
                         ep_link.stylize(f"link {ep.link}")
                         console.print("    • ", ep_link, f" ({ep.episode_type}) - {ep.title}", sep="")
-                        console.print(f"      [dim]Published: {ep.published}[/dim]")
+                        ep_duration = f" | Duration: {ep.duration}" if ep.duration else ""
+                        console.print(f"      [dim]Published: {ep.published}{ep_duration}[/dim]")
                 else:
                     console.print(f"\n  [dim]No episodes published in between[/dim]")
 
@@ -892,7 +901,8 @@ def doctor(
                     episode_id_link = Text(episode.episode_id, style="bold cyan")
                     episode_id_link.stylize(f"link {episode.link}")
                     console.print(episode_id_link, f" - {episode.title}", sep="")
-                    console.print(f"[dim]  Published: {episode.published}[/dim]")
+                    episode_duration = f" | Duration: {episode.duration}" if episode.duration else ""
+                    console.print(f"[dim]  Published: {episode.published}{episode_duration}[/dim]")
                     console.print(f"[dim]  Missing: {len(missing)}/{len(episode.tracklist)} tracks[/dim]\n")
 
                     for i, track in enumerate(missing, 1):

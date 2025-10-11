@@ -515,6 +515,7 @@ def download(
         'failed': 0,
         'durations': 0
     }
+    failed_episodes = []  # Track failed episodes with error details
 
     async def download_episode(client: httpx.AsyncClient, episode, progress, overall_task, semaphore):
         """Download a single episode asynchronously"""
@@ -554,7 +555,42 @@ def download(
 
                     stats['downloaded'] += 1
 
+                except httpx.HTTPStatusError as e:
+                    # HTTP error with status code
+                    error_msg = f"HTTP {e.response.status_code}"
+                    failed_episodes.append({
+                        'episode': episode,
+                        'error': error_msg,
+                        'url': episode.audio_url
+                    })
+                    progress.update(overall_task, description=f"[red]Failed {episode.episode_id}[/red]")
+                    stats['failed'] += 1
+                    if cached_path.exists():
+                        cached_path.unlink()
+                    progress.update(overall_task, advance=1)
+                    return
+                except httpx.TimeoutException as e:
+                    # Timeout error
+                    error_msg = "Timeout (60s)"
+                    failed_episodes.append({
+                        'episode': episode,
+                        'error': error_msg,
+                        'url': episode.audio_url
+                    })
+                    progress.update(overall_task, description=f"[red]Failed {episode.episode_id}[/red]")
+                    stats['failed'] += 1
+                    if cached_path.exists():
+                        cached_path.unlink()
+                    progress.update(overall_task, advance=1)
+                    return
                 except Exception as e:
+                    # Other errors
+                    error_msg = f"{type(e).__name__}: {str(e)}"
+                    failed_episodes.append({
+                        'episode': episode,
+                        'error': error_msg,
+                        'url': episode.audio_url
+                    })
                     progress.update(overall_task, description=f"[red]Failed {episode.episode_id}[/red]")
                     stats['failed'] += 1
                     if cached_path.exists():
@@ -591,6 +627,12 @@ def download(
                         pass  # Silently fail duration extraction
 
             except Exception as e:
+                error_msg = f"Link failed: {type(e).__name__}: {str(e)}"
+                failed_episodes.append({
+                    'episode': episode,
+                    'error': error_msg,
+                    'url': episode.audio_url
+                })
                 progress.update(overall_task, description=f"[red]Failed to link {episode.episode_id}[/red]")
                 stats['failed'] += 1
 
@@ -642,7 +684,19 @@ def download(
         console.print(f"  [red]Failed: {stats['failed']}[/red]")
     if stats['durations'] > 0:
         console.print(f"  [cyan]Durations extracted: {stats['durations']}[/cyan]")
-    console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]\n")
+
+    # Display failed episodes with details
+    if failed_episodes:
+        console.print(f"\n[bold red]Failed Downloads:[/bold red]")
+        for failure in failed_episodes:
+            ep = failure['episode']
+            error = failure['error']
+            url = failure['url']
+            console.print(f"\n  [red]•[/red] [bold]{ep.episode_id}[/bold] - {ep.title}")
+            console.print(f"    [dim]Error:[/dim] {error}")
+            console.print(f"    [dim]URL:[/dim] [link={url}]{url[:80]}{'...' if len(url) > 80 else ''}[/link]")
+
+    console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]")
     console.print(f"[dim]Audio cache: {paths.audio_cache_dir}[/dim]\n")
 
 

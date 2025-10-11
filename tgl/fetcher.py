@@ -334,6 +334,72 @@ class PatreonPodcastFetcher:
 
         return tracks
 
+    def _infer_episode_numbers(self, tgl_episodes: list) -> dict:
+        """Infer episode numbers for TGL episodes without explicit numbers
+
+        Args:
+            tgl_episodes: List of TGL episode data dicts sorted by published date
+
+        Returns:
+            Dict mapping episode link to inferred episode number
+        """
+        inferred = {}
+
+        # First, extract all known episode numbers with their positions
+        known_episodes = []
+        for idx, ep in enumerate(tgl_episodes):
+            ep_num = self.parse_episode_id(ep['title'])
+            if ep_num is not None:
+                known_episodes.append((idx, ep_num, ep['link']))
+
+        # If no known episodes, can't infer
+        if not known_episodes:
+            return inferred
+
+        # For each episode without a number, infer based on position
+        for idx, ep in enumerate(tgl_episodes):
+            ep_num = self.parse_episode_id(ep['title'])
+            if ep_num is None:
+                # Find surrounding known episodes
+                prev_known = None
+                next_known = None
+
+                for known_idx, known_num, known_link in known_episodes:
+                    if known_idx < idx:
+                        prev_known = (known_idx, known_num)
+                    elif known_idx > idx and next_known is None:
+                        next_known = (known_idx, known_num)
+                        break
+
+                # Infer based on position
+                if prev_known and next_known:
+                    # Between two known episodes - interpolate
+                    prev_idx, prev_num = prev_known
+                    next_idx, next_num = next_known
+
+                    # Calculate position ratio
+                    total_gap = next_idx - prev_idx
+                    position_in_gap = idx - prev_idx
+
+                    # Interpolate episode number
+                    num_gap = next_num - prev_num
+                    inferred_num = prev_num + round((num_gap * position_in_gap) / total_gap)
+                    inferred[ep['link']] = inferred_num
+
+                elif prev_known:
+                    # After last known episode - increment
+                    prev_idx, prev_num = prev_known
+                    gap = idx - prev_idx
+                    inferred[ep['link']] = prev_num + gap
+
+                elif next_known:
+                    # Before first known episode - decrement
+                    next_idx, next_num = next_known
+                    gap = next_idx - idx
+                    inferred[ep['link']] = max(1, next_num - gap)
+
+        return inferred
+
     def classify_episode_type(self, title: str) -> str:
         """Classify episode as TGL or BONUS based on title"""
         title_lower = title.lower()
@@ -348,6 +414,7 @@ class PatreonPodcastFetcher:
             r'\binterview\b',
             r'\bextra\b',  # "The Guestlist Extra" etc.
             r'\blistening guide\b',  # "Echo Drop EP and listening guide" etc.
+            r'\brunners?\s+club\b',  # "Runners Club" or "Runner Club"
         ]
 
         for pattern in bonus_patterns:
@@ -467,6 +534,11 @@ class PatreonPodcastFetcher:
             for idx, ep in enumerate(bonus_episodes, start=1):
                 bonus_id_map[ep['link']] = idx
 
+            # Infer episode numbers for TGL episodes without explicit numbers
+            tgl_episodes = [ep for ep in temp_episodes if ep['episode_type'] == 'TGL']
+            tgl_episodes.sort(key=lambda ep: ep['published_parsed'] if ep['published_parsed'] else time.struct_time((1970, 1, 1, 0, 0, 0, 0, 1, 0)))
+            inferred_numbers = self._infer_episode_numbers(tgl_episodes)
+
             # Third pass: create Episode objects with proper IDs
             episodes = []
             for ep_data in temp_episodes:
@@ -475,7 +547,8 @@ class PatreonPodcastFetcher:
                 if episode_type == 'TGL':
                     numeric_id = self.parse_episode_id(ep_data['title'])
                     if numeric_id is None:
-                        numeric_id = 0  # Fallback for unparseable TGL episodes
+                        # Try to use inferred number
+                        numeric_id = inferred_numbers.get(ep_data['link'], 0)
                     episode_id_str = f"E{numeric_id}" if numeric_id > 0 else "E???"
                 else:
                     # BONUS episodes use sequential numbering with offset to avoid conflicts

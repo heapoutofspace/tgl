@@ -575,8 +575,7 @@ def download(
 
 @app.command()
 def spotify(
-    episodes: Optional[List[str]] = typer.Option(None, "--episode", help="Create playlist for specific episode (can be used multiple times)"),
-    years: Optional[List[int]] = typer.Option(None, "--year", help="Create playlist for all tracks from a year (can be used multiple times)"),
+    identifiers: Optional[List[str]] = typer.Argument(None, help="Years (4 digits) or episode IDs (e.g., 2024, 390, E390, B01)"),
     all_years: bool = typer.Option(False, "--years", help="Create playlists for all years with episodes"),
     all_tracks: bool = typer.Option(False, "--all", help="Create playlist with ALL tracks from all episodes"),
     sync: bool = typer.Option(False, "--sync", help="Update all playlists currently tracked in state"),
@@ -586,19 +585,17 @@ def spotify(
     """Manage Spotify playlists for TGL episodes
 
     Run without arguments to authorize Spotify access.
-    Multiple playlist options can be combined:
 
-      tgl spotify --episode E390 --year 2024 --all
+    Provide years (4 digits) or episode IDs as arguments:
 
-    This will create/update all three playlists in sequence.
-
-    Use --years to create playlists for all years:
-
-      tgl spotify --years
-
-    Use --sync to update all playlists currently tracked in state:
-
-      tgl spotify --sync
+      tgl spotify 2024           # Year 2024
+      tgl spotify 390            # Episode E390 (auto-detected as TGL)
+      tgl spotify E390           # Episode E390 (explicit)
+      tgl spotify B01            # BONUS episode B01
+      tgl spotify 2024 390 391   # Multiple years/episodes
+      tgl spotify --all          # All tracks from all episodes
+      tgl spotify --years        # Create playlists for all years
+      tgl spotify --sync         # Update all tracked playlists
     """
     # Check if Spotify credentials are configured
     if not settings.spotify_client_id or not settings.spotify_client_secret:
@@ -610,15 +607,31 @@ def spotify(
         console.print("[dim]Or run: [cyan]tgl config init[/cyan] to reconfigure everything[/dim]\n")
         raise typer.Exit(1)
 
-    # Validate that --years and --year are mutually exclusive
+    # Parse identifiers into years and episodes
+    years = []
+    episodes = []
+
+    if identifiers:
+        for identifier in identifiers:
+            # Check if it's a 4-digit year
+            if identifier.isdigit() and len(identifier) == 4:
+                years.append(int(identifier))
+            # Check if it's a number with less than 4 digits (assume TGL episode)
+            elif identifier.isdigit() and len(identifier) < 4:
+                episodes.append(f"E{identifier}")
+            # Otherwise treat as episode ID (E390, B01, etc.)
+            else:
+                episodes.append(identifier)
+
+    # Validate that --years is mutually exclusive with year arguments
     if all_years and years:
-        console.print("\n[red]Error: --years cannot be used with --year[/red]\n")
-        console.print("[dim]Use --years to create playlists for all years, or --year to specify individual years[/dim]\n")
+        console.print("\n[red]Error: --years cannot be used with year arguments[/red]\n")
+        console.print("[dim]Use --years to create playlists for all years, or specify individual years as arguments[/dim]\n")
         raise typer.Exit(1)
 
     # Validate that --sync is mutually exclusive with other playlist options
     if sync and (episodes or years or all_years or all_tracks):
-        console.print("\n[red]Error: --sync cannot be used with --episode, --year, --years, or --all[/red]\n")
+        console.print("\n[red]Error: --sync cannot be used with episode/year arguments or --years/--all options[/red]\n")
         console.print("[dim]Use --sync alone to update all tracked playlists, or specify individual playlists without --sync[/dim]\n")
         raise typer.Exit(1)
 
@@ -626,15 +639,17 @@ def spotify(
     from .spotify import SpotifyManager
     spotify_manager = SpotifyManager(settings, dry_run=dry_run, verbose=verbose)
 
-    # If no options provided, just run authorization
+    # If no arguments/options provided, just run authorization
     if not episodes and not years and not all_years and not all_tracks and not sync:
         if spotify_manager.authorize():
             console.print("[green]✓ Spotify authorization successful[/green]")
             console.print("[dim]You can now use Spotify commands like:[/dim]")
-            console.print("[dim]  [cyan]tgl spotify --episode E390[/cyan][/dim]")
-            console.print("[dim]  [cyan]tgl spotify --year 2024[/cyan][/dim]")
+            console.print("[dim]  [cyan]tgl spotify 2024[/cyan] (year)[/dim]")
+            console.print("[dim]  [cyan]tgl spotify 390[/cyan] (episode E390)[/dim]")
+            console.print("[dim]  [cyan]tgl spotify E390 B01[/cyan] (multiple episodes)[/dim]")
+            console.print("[dim]  [cyan]tgl spotify 2024 390[/cyan] (year + episode)[/dim]")
+            console.print("[dim]  [cyan]tgl spotify --all[/cyan] (all tracks)[/dim]")
             console.print("[dim]  [cyan]tgl spotify --years[/cyan] (all years)[/dim]")
-            console.print("[dim]  [cyan]tgl spotify --all[/cyan][/dim]")
             console.print("[dim]  [cyan]tgl spotify --sync[/cyan] (update all tracked playlists)[/dim]\n")
         raise typer.Exit(0)
 

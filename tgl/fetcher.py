@@ -716,10 +716,9 @@ class PatreonPodcastFetcher:
                         numeric_id = 118
                         episode_id_str = "E118"
                     elif 'Old School Delight' in ep_data['title'] and numeric_id == 126:
-                        # E126 "Old School Delight" -> E126.5 (special number)
-                        # Use unique numeric_id 12650 to represent 126.5 (avoids conflicts with E126)
-                        numeric_id = 12650
-                        episode_id_str = "E126.5"
+                        # E126 "Old School Delight" -> E226 (correct episode number)
+                        numeric_id = 226
+                        episode_id_str = "E226"
                     else:
                         episode_id_str = f"E{numeric_id}" if numeric_id > 0 else "E???"
                 else:

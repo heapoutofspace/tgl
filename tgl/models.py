@@ -72,7 +72,6 @@ def parse_episode_id(episode_id_str: str) -> int:
     Accepts:
     - Plain numbers: "390" -> 390 (TGL episode)
     - E prefix: "E390" -> 390 (TGL episode)
-    - E prefix with decimal: "E126.5" -> 126 (special case for duplicate handling)
     - B prefix: "B05" -> 10005 (BONUS episode, 10000 + 5)
     """
     episode_id_str = episode_id_str.strip().upper()
@@ -80,16 +79,7 @@ def parse_episode_id(episode_id_str: str) -> int:
     if episode_id_str.startswith('E'):
         # TGL episode
         try:
-            # Handle special case for "E126.5" -> numeric ID 12650
-            id_part = episode_id_str[1:]
-            if id_part == '126.5':
-                return 12650
-            elif '.' in id_part:
-                # For other decimal episode IDs, convert to unique numeric ID
-                # E.g., "E100.5" would become 10050
-                parts = id_part.split('.')
-                return int(parts[0]) * 100 + int(parts[1]) * 10
-            return int(id_part)
+            return int(episode_id_str[1:])
         except ValueError:
             raise ValueError(f"Invalid episode ID format: {episode_id_str}")
     elif episode_id_str.startswith('B'):

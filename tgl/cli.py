@@ -217,6 +217,7 @@ def list(
     table.add_column("Tracks", style="dim", justify="center", width=6)
     table.add_column("Date", style="yellow", width=12)
     table.add_column("Duration", style="cyan", justify="right", width=8)
+    table.add_column("DL", style="dim", justify="center", width=3)
 
     for episode in episodes:
         # Create clickable episode ID
@@ -232,7 +233,18 @@ def list(
         # Get duration
         duration = episode.duration if episode.duration else "-"
 
-        table.add_row(type_icon, clickable_id, episode.title, track_count, episode.published, duration)
+        # Check if audio file is downloaded
+        if episode.episode_type == 'TGL':
+            dest_dir = paths.tgl_episodes_dir
+        else:
+            dest_dir = paths.bonus_episodes_dir
+
+        filename = f"{episode.episode_id} - {episode.title}.mp3"
+        filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+        dest_path = dest_dir / filename
+        download_status = "✓" if dest_path.exists() else "-"
+
+        table.add_row(type_icon, clickable_id, episode.title, track_count, episode.published, duration, download_status)
 
     console.print(table)
     console.print(f"\n[dim]Total: {len(episodes)} episodes[/dim]")

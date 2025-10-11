@@ -777,7 +777,8 @@ def spotify(
 
                     success = spotify_manager.sync_episode_playlist(
                         ep,
-                        playlist_format=settings.spotify_episode_playlist_format
+                        playlist_format=settings.spotify_episode_playlist_format,
+                        playlist_description=settings.spotify_episode_playlist_description
                     )
                     if not success:
                         all_success = False
@@ -792,7 +793,8 @@ def spotify(
                     success = spotify_manager.sync_year_playlist(
                         year,
                         all_episodes_list,
-                        playlist_format=settings.spotify_year_playlist_format
+                        playlist_format=settings.spotify_year_playlist_format,
+                        playlist_description=settings.spotify_year_playlist_description
                     )
                     if not success:
                         all_success = False
@@ -803,7 +805,8 @@ def spotify(
             elif playlist_key == "all":
                 success = spotify_manager.sync_all_playlist(
                     all_episodes_list,
-                    playlist_format=settings.spotify_all_playlist_format
+                    playlist_format=settings.spotify_all_playlist_format,
+                    playlist_description=settings.spotify_all_playlist_description
                 )
                 if not success:
                     all_success = False
@@ -829,7 +832,8 @@ def spotify(
 
                 success = spotify_manager.sync_episode_playlist(
                     ep,
-                    playlist_format=settings.spotify_episode_playlist_format
+                    playlist_format=settings.spotify_episode_playlist_format,
+                    playlist_description=settings.spotify_episode_playlist_description
                 )
                 if not success:
                     all_success = False
@@ -843,7 +847,8 @@ def spotify(
             success = spotify_manager.sync_year_playlist(
                 year,
                 all_episodes_list,
-                playlist_format=settings.spotify_year_playlist_format
+                playlist_format=settings.spotify_year_playlist_format,
+                playlist_description=settings.spotify_year_playlist_description
             )
             if not success:
                 all_success = False
@@ -852,7 +857,8 @@ def spotify(
     if all_tracks:
         success = spotify_manager.sync_all_playlist(
             all_episodes_list,
-            playlist_format=settings.spotify_all_playlist_format
+            playlist_format=settings.spotify_all_playlist_format,
+            playlist_description=settings.spotify_all_playlist_description
         )
         if not success:
             all_success = False

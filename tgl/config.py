@@ -216,16 +216,34 @@ class Settings(BaseSettings):
         description="Format for episode playlist names ({id} and {title} are replaced)"
     )
 
+    spotify_episode_playlist_description: str = Field(
+        default='Tracks from {id}: {title}',
+        validation_alias=AliasChoices('TGL_SPOTIFY_EPISODE_PLAYLIST_DESCRIPTION', 'SPOTIFY_EPISODE_PLAYLIST_DESCRIPTION'),
+        description="Format for episode playlist descriptions ({id} and {title} are replaced)"
+    )
+
     spotify_year_playlist_format: str = Field(
         default='The {year} Sound of The Guestlist by Fear of Tigers',
         validation_alias=AliasChoices('TGL_SPOTIFY_YEAR_PLAYLIST_FORMAT', 'SPOTIFY_YEAR_PLAYLIST_FORMAT'),
         description="Format for year playlist names ({year} is replaced)"
     )
 
+    spotify_year_playlist_description: str = Field(
+        default='All tracks from The Guestlist episodes published in {year}',
+        validation_alias=AliasChoices('TGL_SPOTIFY_YEAR_PLAYLIST_DESCRIPTION', 'SPOTIFY_YEAR_PLAYLIST_DESCRIPTION'),
+        description="Format for year playlist descriptions ({year} is replaced)"
+    )
+
     spotify_all_playlist_format: str = Field(
         default='The Sound of The Guestlist by Fear of Tigers',
         validation_alias=AliasChoices('TGL_SPOTIFY_ALL_PLAYLIST_FORMAT', 'SPOTIFY_ALL_PLAYLIST_FORMAT'),
         description="Format for all-tracks playlist name"
+    )
+
+    spotify_all_playlist_description: str = Field(
+        default='All tracks from every episode of The Guestlist podcast',
+        validation_alias=AliasChoices('TGL_SPOTIFY_ALL_PLAYLIST_DESCRIPTION', 'SPOTIFY_ALL_PLAYLIST_DESCRIPTION'),
+        description="Format for all-tracks playlist description"
     )
 
     # Path overrides (documentation only - these are read directly by TGLPaths before Settings loads)

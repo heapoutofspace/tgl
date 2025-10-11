@@ -535,13 +535,17 @@ class SpotifyManager:
     def sync_episode_playlist(
         self,
         episode: Episode,
-        playlist_format: str = "TGL {id}: {title}"
+        playlist_format: str = "TGL {id}: {title}",
+        playlist_description: str = "Tracks from {id}: {title}"
     ) -> bool:
         """Create or update a playlist for a single episode
 
         Args:
             episode: Episode to create playlist for
             playlist_format: Format string for playlist name
+                {id} = episode ID (e.g., "E390")
+                {title} = episode title
+            playlist_description: Format string for playlist description
                 {id} = episode ID (e.g., "E390")
                 {title} = episode title
 
@@ -552,8 +556,12 @@ class SpotifyManager:
             console.print(f"[yellow]Episode {episode.episode_id} has no tracklist[/yellow]")
             return False
 
-        # Generate playlist name
+        # Generate playlist name and description
         playlist_name = playlist_format.format(
+            id=episode.episode_id,
+            title=episode.title
+        )
+        playlist_desc = playlist_description.format(
             id=episode.episode_id,
             title=episode.title
         )
@@ -631,10 +639,32 @@ class SpotifyManager:
                 user=self._user_id,
                 name=playlist_name,
                 public=True,
-                description=f"Tracks from {episode.episode_id}: {episode.title}"
+                description=playlist_desc
             )
             playlist_id = playlist['id']
             console.print(f"[green]✓[/green] Created playlist")
+        else:
+            # Update playlist name and description if they don't match
+            client = self._get_user_client()
+            current_playlist = client.playlist(playlist_id)
+            needs_update = False
+
+            if current_playlist['name'] != playlist_name:
+                console.print(f"[yellow]Updating playlist name:[/yellow] {current_playlist['name']} → {playlist_name}")
+                needs_update = True
+
+            if current_playlist['description'] != playlist_desc:
+                console.print(f"[yellow]Updating playlist description[/yellow]")
+                needs_update = True
+
+            if needs_update:
+                self._log_api_call("UPDATE_PLAYLIST", f"{playlist_name}")
+                client.playlist_change_details(
+                    playlist_id,
+                    name=playlist_name,
+                    description=playlist_desc
+                )
+                console.print(f"[green]✓[/green] Updated playlist details")
 
         # Determine which tracks to add (not already in playlist)
         tracks_to_add = [tid for tid in track_ids if tid not in existing_track_ids]
@@ -678,7 +708,8 @@ class SpotifyManager:
         self,
         year: int,
         episodes: List[Episode],
-        playlist_format: str = "The {year} Sound of The Guestlist by Fear of Tigers"
+        playlist_format: str = "The {year} Sound of The Guestlist by Fear of Tigers",
+        playlist_description: str = "All tracks from The Guestlist episodes published in {year}"
     ) -> bool:
         """Create or update a playlist for all tracks from a specific year
 
@@ -688,6 +719,7 @@ class SpotifyManager:
             year: Year to create playlist for
             episodes: List of all episodes (will be filtered by year)
             playlist_format: Format string for playlist name ({year} is replaced)
+            playlist_description: Format string for playlist description ({year} is replaced)
 
         Returns:
             True if successful, False otherwise
@@ -702,8 +734,9 @@ class SpotifyManager:
         # Sort episodes by date (most recent first) for determining last appearance
         episodes_sorted = sorted(year_episodes, key=lambda e: e.published, reverse=True)
 
-        # Generate playlist name
+        # Generate playlist name and description
         playlist_name = playlist_format.format(year=year)
+        playlist_desc = playlist_description.format(year=year)
         playlist_key = f"year:{year}"
 
         console.print(f"\n[cyan]Processing year playlist:[/cyan] {playlist_name}")
@@ -811,10 +844,32 @@ class SpotifyManager:
                 user=self._user_id,
                 name=playlist_name,
                 public=True,
-                description=f"All tracks from The Guestlist in {year}, ordered by last appearance"
+                description=playlist_desc
             )
             playlist_id = playlist['id']
             console.print(f"[green]✓[/green] Created playlist")
+        else:
+            # Update playlist name and description if they don't match
+            client = self._get_user_client()
+            current_playlist = client.playlist(playlist_id)
+            needs_update = False
+
+            if current_playlist['name'] != playlist_name:
+                console.print(f"[yellow]Updating playlist name:[/yellow] {current_playlist['name']} → {playlist_name}")
+                needs_update = True
+
+            if current_playlist['description'] != playlist_desc:
+                console.print(f"[yellow]Updating playlist description[/yellow]")
+                needs_update = True
+
+            if needs_update:
+                self._log_api_call("UPDATE_PLAYLIST", f"{playlist_name}")
+                client.playlist_change_details(
+                    playlist_id,
+                    name=playlist_name,
+                    description=playlist_desc
+                )
+                console.print(f"[green]✓[/green] Updated playlist details")
 
         # Check if we need to update the playlist
         existing_set = set(existing_track_ids)
@@ -878,7 +933,8 @@ class SpotifyManager:
     def sync_all_playlist(
         self,
         episodes: List[Episode],
-        playlist_format: str = "The Sound of The Guestlist by Fear of Tigers"
+        playlist_format: str = "The Sound of The Guestlist by Fear of Tigers",
+        playlist_description: str = "All tracks from every episode of The Guestlist podcast"
     ) -> bool:
         """Create or update a playlist with ALL tracks from all episodes
 
@@ -887,6 +943,7 @@ class SpotifyManager:
         Args:
             episodes: List of all episodes
             playlist_format: Name for the playlist
+            playlist_description: Description for the playlist
 
         Returns:
             True if successful, False otherwise
@@ -902,6 +959,7 @@ class SpotifyManager:
         episodes_sorted = sorted(episodes_with_tracks, key=lambda e: e.published, reverse=True)
 
         playlist_name = playlist_format
+        playlist_desc = playlist_description
         playlist_key = "all"
 
         console.print(f"\n[cyan]Processing all-tracks playlist:[/cyan] {playlist_name}")
@@ -1009,10 +1067,32 @@ class SpotifyManager:
                 user=self._user_id,
                 name=playlist_name,
                 public=True,
-                description="All tracks from The Guestlist podcast - ordered by most recent appearance"
+                description=playlist_desc
             )
             playlist_id = playlist['id']
             console.print(f"[green]✓[/green] Created playlist")
+        else:
+            # Update playlist name and description if they don't match
+            client = self._get_user_client()
+            current_playlist = client.playlist(playlist_id)
+            needs_update = False
+
+            if current_playlist['name'] != playlist_name:
+                console.print(f"[yellow]Updating playlist name:[/yellow] {current_playlist['name']} → {playlist_name}")
+                needs_update = True
+
+            if current_playlist['description'] != playlist_desc:
+                console.print(f"[yellow]Updating playlist description[/yellow]")
+                needs_update = True
+
+            if needs_update:
+                self._log_api_call("UPDATE_PLAYLIST", f"{playlist_name}")
+                client.playlist_change_details(
+                    playlist_id,
+                    name=playlist_name,
+                    description=playlist_desc
+                )
+                console.print(f"[green]✓[/green] Updated playlist details")
 
         # Check if we need to update the playlist
         existing_set = set(existing_track_ids)

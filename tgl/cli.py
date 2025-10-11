@@ -1407,17 +1407,70 @@ def config_init():
         if spotify_uri:
             config_data["spotify_redirect_uri"] = spotify_uri
 
-        playlist_name = typer.prompt("Spotify Playlist Name", default="The Sound of The Guestlist by Fear of Tigers")
-        if playlist_name:
-            config_data["spotify_playlist_name"] = playlist_name
+    # Write config file with comments
+    config_content = """# TGL (The Guestlist) Configuration File
+# This file uses TOML format: https://toml.io
+#
+# You can edit this file directly or use: tgl config set <key> <value>
+# View current config: tgl config show
 
-    # Write config file
-    with open(paths.config_file, 'wb') as f:
-        tomli_w.dump(config_data, f)
+# ====== REQUIRED CONFIGURATION ======
+
+"""
+
+    # Add patreon_rss_url
+    config_content += f'patreon_rss_url = "{config_data["patreon_rss_url"]}"\n\n'
+
+    config_content += """# ====== SPOTIFY INTEGRATION ======
+
+# Spotify API Credentials (only needed for 'tgl spotify' command)
+# Create an app at: https://developer.spotify.com/dashboard
+"""
+
+    if "spotify_client_id" in config_data:
+        config_content += f'spotify_client_id = "{config_data["spotify_client_id"]}"\n'
+    else:
+        config_content += '# spotify_client_id = "your_spotify_client_id"\n'
+
+    if "spotify_client_secret" in config_data:
+        config_content += f'spotify_client_secret = "{config_data["spotify_client_secret"]}"\n'
+    else:
+        config_content += '# spotify_client_secret = "your_spotify_client_secret"\n'
+
+    if "spotify_redirect_uri" in config_data:
+        config_content += f'spotify_redirect_uri = "{config_data["spotify_redirect_uri"]}"\n\n'
+    else:
+        config_content += '# spotify_redirect_uri = "http://127.0.0.1:8888/callback"\n\n'
+
+    config_content += """# ====== SPOTIFY PLAYLIST CONFIGURATION ======
+
+# Episode Playlist Title and Description
+# Used when creating playlists for individual episodes
+# Placeholders: {id} = episode ID (e.g., E390), {title} = episode title
+# spotify_episode_playlist_format = "TGL {id}: {title}"
+# spotify_episode_playlist_description = "Tracks from {id}: {title}"
+
+# Year Playlist Title and Description
+# Used when creating playlists for all episodes from a specific year
+# Placeholder: {year} = year (e.g., 2024)
+# spotify_year_playlist_format = "The {year} Sound of The Guestlist by Fear of Tigers"
+# spotify_year_playlist_description = "All tracks from The Guestlist episodes published in {year}"
+
+# All-Tracks Playlist Title and Description
+# Used when creating the master playlist with all tracks
+# spotify_all_playlist_format = "The Sound of The Guestlist by Fear of Tigers"
+# spotify_all_playlist_description = "All tracks from every episode of The Guestlist podcast"
+"""
+
+    # Write the config file
+    paths.config_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(paths.config_file, 'w') as f:
+        f.write(config_content)
 
     console.print(f"\n[green]✓[/green] Configuration saved to:")
     console.print(f"[cyan]{paths.config_file}[/cyan]\n")
-    console.print("[dim]You can update your configuration anytime with: [cyan]tgl config set[/cyan][/dim]\n")
+    console.print("[dim]The config file includes all available options with helpful comments.[/dim]")
+    console.print("[dim]You can edit it directly or use: [cyan]tgl config set <key> <value>[/cyan][/dim]\n")
 
 
 @app.command(hidden=True)

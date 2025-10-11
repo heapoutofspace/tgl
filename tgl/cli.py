@@ -128,7 +128,7 @@ def list(
     bonus: bool = typer.Option(False, "--bonus", help="Show only BONUS episodes"),
     summary: bool = typer.Option(False, "--summary", help="Show only summary statistics")
 ):
-    """List all episodes"""
+    """List all episodes with download status indicators (✅ = downloaded, - = not downloaded)"""
     cache = MetadataCache()
 
     # Auto-refresh if cache is stale or empty
@@ -460,10 +460,14 @@ def download(
     all: bool = typer.Option(False, "--all", help="Download all episodes"),
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files")
 ):
-    """Download episode audio files
+    """Download episode audio files with verification and metadata extraction
 
-    Downloads episodes to the data directory organized in tgl/ and bonus/ folders.
-    As a bonus, extracts duration metadata from downloaded files.
+    Features:
+    - Files saved with correct extensions (.mp3, .wav, .m4a, .aac, .flac, etc.)
+    - Verifies file sizes match RSS feed before skipping
+    - Extracts duration metadata from audio files
+    - Concurrent downloads (up to 5 at once)
+    - Detailed error reporting with clickable Patreon links
 
     Examples:
       tgl download E390           # Download single episode
@@ -471,6 +475,7 @@ def download(
       tgl download --tgl          # Download all TGL episodes
       tgl download --bonus        # Download all BONUS episodes
       tgl download --all          # Download all episodes
+      tgl download E390 --force   # Re-download even if exists
     """
     from .fetcher import PatreonPodcastFetcher, MUTAGEN_AVAILABLE
 

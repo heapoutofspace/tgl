@@ -87,7 +87,10 @@ export TGL_PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-to
 export TGL_SPOTIFY_CLIENT_ID=your_client_id
 export TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
 export TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
-# export TGL_SPOTIFY_PLAYLIST_NAME="The Sound of The Guestlist by Fear of Tigers"  # default
+
+# Optional - Spotify playlist formats (see .env.example for all options)
+# export TGL_SPOTIFY_EPISODE_PLAYLIST_FORMAT="TGL {id}: {title}"
+# export TGL_SPOTIFY_YEAR_PLAYLIST_FORMAT="The {year} Sound of The Guestlist"
 ```
 
 **Option 3: .env file**
@@ -103,7 +106,11 @@ TGL_PATREON_RSS_URL=https://www.patreon.com/rss/your-creator?auth=your-token
 # TGL_SPOTIFY_CLIENT_ID=your_client_id
 # TGL_SPOTIFY_CLIENT_SECRET=your_client_secret
 # TGL_SPOTIFY_REDIRECT_URI=http://127.0.0.1:8888/callback
-# TGL_SPOTIFY_PLAYLIST_NAME=The Sound of The Guestlist by Fear of Tigers  # default
+
+# Spotify Playlist Configuration (see .env.example for all options)
+# TGL_SPOTIFY_EPISODE_PLAYLIST_FORMAT=TGL {id}: {title}
+# TGL_SPOTIFY_YEAR_PLAYLIST_FORMAT=The {year} Sound of The Guestlist
+# TGL_SPOTIFY_ALL_PLAYLIST_FORMAT=The Sound of The Guestlist
 
 # Optional: Override data directory location
 # TGL_DATA_DIR=/custom/path/to/data
@@ -130,7 +137,7 @@ echo "TGL_DATA_DIR=/path/to/custom/data" >> .env
 ### List Episodes
 
 ```bash
-# List all episodes
+# List all episodes (shows ✅ for downloaded episodes)
 tgl list
 
 # Filter by year
@@ -141,7 +148,16 @@ tgl list --tgl
 
 # Show only BONUS episodes
 tgl list --bonus
+
+# Show only summary statistics
+tgl list --summary
 ```
+
+The list command displays:
+- **✅** Download status indicator for episodes you have locally
+- Episode type (🎧 TGL or 🎁 BONUS)
+- Track count, date, and duration
+- Clickable episode IDs that open the Patreon post
 
 ### Episode Details
 
@@ -165,31 +181,83 @@ tgl search LAU
 tgl search "Fabrizio Mammarella"
 ```
 
-### Download
+### Download Episodes
 
 ```bash
-# Download episode audio
+# Download single episode
 tgl download E390
+
+# Download multiple episodes
+tgl download E390 E391 B01
+
+# Download all TGL episodes
+tgl download --tgl
+
+# Download all BONUS episodes
+tgl download --bonus
+
+# Download all episodes
+tgl download --all
+
+# Force re-download (even if file exists)
+tgl download E390 --force
 ```
+
+**Features:**
+- Files saved with **correct extensions** (.mp3, .wav, .m4a, .aac, .flac, etc.)
+- **Verifies file sizes** match RSS feed before skipping downloads
+- **Extracts duration** metadata from audio files automatically
+- **Concurrent downloads** (up to 5 at once) for faster batch downloads
+- **Detailed error reporting** with clickable Patreon links if downloads fail
 
 ### Spotify Import
 
 ```bash
-# Import all episodes
-tgl spotify
+# Sync specific year or episode
+tgl spotify 2024        # Year 2024
+tgl spotify E390        # Episode E390
+tgl spotify B01         # BONUS episode B01
+tgl spotify 2024 E390   # Multiple years/episodes
 
-# Import last 10 episodes
-tgl spotify -n 10
+# Create playlists for all years
+tgl spotify --years
 
-# Import specific year
-tgl spotify --year 2023
+# Create all-tracks playlist
+tgl spotify --all
 
-# Dry run (no Spotify ops)
-tgl spotify --dryrun
+# Update all tracked playlists
+tgl spotify --sync
 
-# Force refresh (ignore cache)
-tgl spotify --force-refresh
+# Dry run (preview only, no changes)
+tgl spotify --dry-run
+
+# Show Spotify API calls
+tgl spotify --verbose
 ```
+
+**Playlist Configuration:**
+
+Customize playlist titles and descriptions with placeholders:
+
+```bash
+# Episode playlists (placeholders: {id}, {title})
+tgl config set spotify_episode_playlist_format "TGL {id}: {title}"
+tgl config set spotify_episode_playlist_description "Tracks from {id}: {title}"
+
+# Year playlists (placeholder: {year})
+tgl config set spotify_year_playlist_format "The {year} Sound of The Guestlist"
+tgl config set spotify_year_playlist_description "All tracks from {year}"
+
+# All-tracks playlist
+tgl config set spotify_all_playlist_format "The Sound of The Guestlist"
+tgl config set spotify_all_playlist_description "All tracks from every episode"
+```
+
+**Features:**
+- **Auto-updates** playlist titles and descriptions if configuration changes
+- **State tracking** prevents duplicate imports
+- **Failed track retry** with 7-day cooldown (max 5 attempts)
+- **Batch operations** for efficient API usage
 
 ### Update Cache
 
@@ -230,10 +298,11 @@ guestlistr/
 ├── pyproject.toml              # Dependencies & config
 ├── README.md
 ├── .env.example
-├── src/tgl/
+├── tgl/
 │   ├── __init__.py            # Package exports
 │   ├── cli.py                 # CLI commands & config management
-│   ├── models.py              # Pydantic models & settings
+│   ├── config.py              # Configuration & settings
+│   ├── models.py              # Pydantic data models
 │   ├── paths.py               # Platform-specific paths
 │   ├── fetcher.py             # RSS & tracklist parser
 │   ├── cache.py               # Metadata cache

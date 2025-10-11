@@ -4,11 +4,19 @@ import re
 import time
 from typing import List, Optional
 from html import unescape
+from io import BytesIO
 import requests
 import feedparser
 from rich.console import Console
 
 from .models import Episode, TrackInfo, Track
+
+try:
+    from mutagen.mp3 import MP3
+    from mutagen.id3 import ID3NoHeaderError
+    MUTAGEN_AVAILABLE = True
+except ImportError:
+    MUTAGEN_AVAILABLE = False
 
 console = Console()
 
@@ -541,6 +549,48 @@ class PatreonPodcastFetcher:
         else:
             return f"{minutes}:{secs:02d}"
 
+    def _get_audio_duration(self, audio_url: str) -> Optional[str]:
+        """Get duration from audio file by downloading and parsing it
+
+        Downloads the full audio file to accurately determine duration.
+        This is cached so it only happens once per episode.
+        """
+        if not MUTAGEN_AVAILABLE or not audio_url:
+            return None
+
+        try:
+            # Download the file
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (compatible; TGL-CLI/1.0)',
+            }
+
+            response = requests.get(audio_url, headers=headers, timeout=30, stream=True)
+
+            if response.status_code == 200:
+                # Read the content into memory
+                audio_data = BytesIO()
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        audio_data.write(chunk)
+
+                # Reset to beginning
+                audio_data.seek(0)
+
+                try:
+                    # Parse MP3 metadata
+                    audio = MP3(audio_data)
+                    if audio.info and audio.info.length:
+                        return self._format_duration(int(audio.info.length))
+                except (ID3NoHeaderError, Exception) as e:
+                    # Failed to parse
+                    pass
+
+            return None
+
+        except Exception as e:
+            # Silently fail - duration is optional
+            return None
+
     def fetch_episodes(self, limit: Optional[int] = None) -> List[Episode]:
         """Fetch episodes from the RSS feed"""
         try:
@@ -584,7 +634,7 @@ class PatreonPodcastFetcher:
                 if hasattr(entry, 'enclosures') and entry.enclosures:
                     audio_url = entry.enclosures[0].get('href')
 
-                # Try to get duration from itunes:duration or enclosure length
+                # Try to get duration from itunes:duration first
                 if hasattr(entry, 'itunes_duration'):
                     # itunes_duration can be in HH:MM:SS format or seconds
                     duration_value = entry.itunes_duration
@@ -598,8 +648,9 @@ class PatreonPodcastFetcher:
                         except (ValueError, TypeError):
                             pass
 
-                # Fallback: try to get from enclosure length (usually in bytes, not seconds)
-                # This is less reliable, so we skip it for now
+                # Duration extraction from audio files is disabled by default
+                # as it requires downloading ~60MB per episode (slow and bandwidth-intensive)
+                # Duration will remain None unless RSS feed includes it
 
                 # Get full description
                 raw_description = entry.get('description', '') or entry.get('summary', '')

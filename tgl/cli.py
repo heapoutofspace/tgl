@@ -677,6 +677,48 @@ def spotify(
         raise typer.Exit(1)
 
 
+def find_episode_gaps(cached_episodes, console_obj):
+    """Helper function to find gaps in TGL episode numbering"""
+    from datetime import datetime
+
+    # Get all TGL episodes sorted by episode number
+    tgl_episodes = [ep for ep in cached_episodes if ep.episode_type == 'TGL' and ep.id > 0]
+    tgl_episodes.sort(key=lambda ep: ep.id)
+
+    gaps = []
+    for i in range(len(tgl_episodes) - 1):
+        current = tgl_episodes[i]
+        next_ep = tgl_episodes[i + 1]
+
+        # Check for gap (difference > 1)
+        if next_ep.id - current.id > 1:
+            # Find any episodes published between these two
+            current_date = datetime.fromisoformat(current.published)
+            next_date = datetime.fromisoformat(next_ep.published)
+
+            # Find BONUS and other episodes in between
+            in_between = []
+            for ep in cached_episodes:
+                try:
+                    ep_date = datetime.fromisoformat(ep.published)
+                    if current_date < ep_date < next_date and ep.episode_type != 'TGL':
+                        in_between.append(ep)
+                except (ValueError, AttributeError):
+                    continue
+
+            # Sort by published date
+            in_between.sort(key=lambda ep: ep.published)
+
+            gaps.append({
+                'before': current,
+                'after': next_ep,
+                'missing_numbers': [*range(current.id + 1, next_ep.id)],  # Use list literal instead of list()
+                'in_between': in_between
+            })
+
+    return gaps
+
+
 @app.command()
 def doctor():
     """Diagnose issues with episode metadata and Spotify track mappings
@@ -685,7 +727,6 @@ def doctor():
     - Episodes available in RSS feed but missing from metadata cache
     - Tracks in metadata that couldn't be found on Spotify
     """
-    from datetime import datetime
     import json
 
     console.print("\n[bold cyan]" + "═" * 70)
@@ -704,7 +745,8 @@ def doctor():
     # Check for missing episodes
     console.print("[bold]1. Episodes in RSS but not in metadata cache:[/bold]\n")
 
-    cached_links = {ep.link for ep in cache.get_all_episodes()}
+    cached_episodes = cache.get_all_episodes()
+    cached_links = {ep.link for ep in cached_episodes}
     missing_episodes = [ep for ep in rss_episodes if ep.link not in cached_links]
 
     if missing_episodes:
@@ -717,8 +759,47 @@ def doctor():
     else:
         console.print("[green]✓ All RSS episodes are present in metadata cache[/green]\n")
 
+    # Check for gaps in TGL episode numbering
+    console.print("[bold]2. Gaps in TGL episode numbering:[/bold]\n")
+
+    gaps = find_episode_gaps(cached_episodes, console)
+
+    if gaps:
+        console.print(f"[yellow]Found {len(gaps)} gap(s) in TGL episode numbering:[/yellow]\n")
+
+        for gap in gaps:
+            before = gap['before']
+            after = gap['after']
+            missing = gap['missing_numbers']
+            in_between = gap['in_between']
+
+            if len(missing) == 1:
+                missing_str = f"E{missing[0]}"
+            elif len(missing) <= 3:
+                missing_str = ", ".join([f"E{n}" for n in missing])
+            else:
+                missing_str = f"E{missing[0]}-E{missing[-1]} ({len(missing)} episodes)"
+
+            console.print(f"[bold cyan]Missing: {missing_str}[/bold cyan]")
+            console.print(f"[dim]  Before:[/dim] {before.episode_id} - {before.title[:50]}")
+            console.print(f"[dim]         Published: {before.published}[/dim]")
+            console.print(f"[dim]  After:[/dim]  {after.episode_id} - {after.title[:50]}")
+            console.print(f"[dim]         Published: {after.published}[/dim]")
+
+            if in_between:
+                console.print(f"\n  [yellow]Published in between ({len(in_between)} episode(s)):[/yellow]")
+                for ep in in_between:
+                    console.print(f"    • {ep.episode_id} ({ep.episode_type}) - {ep.title[:50]}")
+                    console.print(f"      [dim]Published: {ep.published}[/dim]")
+            else:
+                console.print(f"\n  [dim]No episodes published in between[/dim]")
+
+            console.print()
+    else:
+        console.print("[green]✓ No gaps found in TGL episode numbering[/green]\n")
+
     # Check for tracks without Spotify IDs
-    console.print("[bold]2. Tracks without Spotify IDs:[/bold]\n")
+    console.print("[bold]3. Tracks without Spotify IDs:[/bold]\n")
 
     # Load Spotify state
     spotify_state_file = paths.data_dir / "spotify.json"

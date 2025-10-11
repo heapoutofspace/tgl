@@ -6,7 +6,7 @@ import io
 import base64
 
 
-COVER_VERSION = "v1"
+COVER_VERSION = "v2"
 
 
 def generate_cover_art(text: str | None = None, output_format: str = 'base64') -> bytes | str:
@@ -52,7 +52,7 @@ def generate_cover_art(text: str | None = None, output_format: str = 'base64') -
     draw = ImageDraw.Draw(img)
 
     # Load font - using larger size to get 80px text height
-    font = ImageFont.truetype(str(font_path), 95)
+    font = ImageFont.truetype(str(font_path), 110)
 
     # Get image dimensions
     img_width = img.width

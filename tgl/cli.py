@@ -141,7 +141,8 @@ def fetch_alias():
 def list(
     year: Optional[int] = typer.Option(None, "--year", help="Filter by year"),
     tgl: bool = typer.Option(False, "--tgl", help="Show only TGL episodes"),
-    bonus: bool = typer.Option(False, "--bonus", help="Show only BONUS episodes")
+    bonus: bool = typer.Option(False, "--bonus", help="Show only BONUS episodes"),
+    summary: bool = typer.Option(False, "--summary", help="Show only summary statistics")
 ):
     """List all episodes"""
     cache = MetadataCache()
@@ -174,49 +175,57 @@ def list(
         console.print(f"[yellow]No episodes found[/yellow]")
         raise typer.Exit(1)
 
-    # Show overview
+    # Generate summary (used both for --summary and after table)
+    def show_summary():
+        console.print()
+        if year:
+            # When filtering by year, just show total
+            tgl_count = sum(1 for ep in episodes if ep.episode_type == 'TGL')
+            bonus_count = sum(1 for ep in episodes if ep.episode_type == 'BONUS')
+            console.print(f"[bold cyan]{year}:[/bold cyan] {len(episodes)} episodes total ([cyan]🎧 {tgl_count}[/cyan], [magenta]🎁 {bonus_count}[/magenta])")
+        else:
+            # Show breakdown by year
+            from collections import defaultdict
+            year_stats = defaultdict(lambda: {'TGL': 0, 'BONUS': 0})
+
+            for episode in episodes:
+                year_stats[episode.year][episode.episode_type] += 1
+
+            overview_table = Table(show_header=True, header_style="bold cyan", box=None)
+            overview_table.add_column("Year", style="cyan", justify="center")
+            overview_table.add_column("🎧 TGL", style="cyan", justify="right")
+            overview_table.add_column("🎁 BONUS", style="magenta", justify="right")
+            overview_table.add_column("Total", style="green", justify="right")
+
+            total_tgl = 0
+            total_bonus = 0
+
+            for yr in sorted(year_stats.keys(), reverse=True):
+                tgl_val = year_stats[yr]['TGL']
+                bonus_val = year_stats[yr]['BONUS']
+                total = tgl_val + bonus_val
+                total_tgl += tgl_val
+                total_bonus += bonus_val
+                overview_table.add_row(str(yr), str(tgl_val), str(bonus_val), str(total))
+
+            # Add totals row
+            overview_table.add_row(
+                "[bold]Total[/bold]",
+                f"[bold]{total_tgl}[/bold]",
+                f"[bold]{total_bonus}[/bold]",
+                f"[bold]{total_tgl + total_bonus}[/bold]"
+            )
+
+            console.print(overview_table)
+        console.print()
+
+    # If --summary flag is set, show summary and exit
+    if summary:
+        show_summary()
+        return
+
+    # Show episode list
     console.print()
-    if year:
-        # When filtering by year, just show total
-        tgl_count = sum(1 for ep in episodes if ep.episode_type == 'TGL')
-        bonus_count = sum(1 for ep in episodes if ep.episode_type == 'BONUS')
-        console.print(f"[bold cyan]{year}:[/bold cyan] {len(episodes)} episodes total ([cyan]🎧 {tgl_count}[/cyan], [magenta]🎁 {bonus_count}[/magenta])")
-    else:
-        # Show breakdown by year
-        from collections import defaultdict
-        year_stats = defaultdict(lambda: {'TGL': 0, 'BONUS': 0})
-
-        for episode in episodes:
-            year_stats[episode.year][episode.episode_type] += 1
-
-        overview_table = Table(show_header=True, header_style="bold cyan", box=None)
-        overview_table.add_column("Year", style="cyan", justify="center")
-        overview_table.add_column("🎧 TGL", style="cyan", justify="right")
-        overview_table.add_column("🎁 BONUS", style="magenta", justify="right")
-        overview_table.add_column("Total", style="green", justify="right")
-
-        total_tgl = 0
-        total_bonus = 0
-
-        for yr in sorted(year_stats.keys(), reverse=True):
-            tgl = year_stats[yr]['TGL']
-            bonus = year_stats[yr]['BONUS']
-            total = tgl + bonus
-            total_tgl += tgl
-            total_bonus += bonus
-            overview_table.add_row(str(yr), str(tgl), str(bonus), str(total))
-
-        # Add totals row
-        overview_table.add_row(
-            "[bold]Total[/bold]",
-            f"[bold]{total_tgl}[/bold]",
-            f"[bold]{total_bonus}[/bold]",
-            f"[bold]{total_tgl + total_bonus}[/bold]"
-        )
-
-        console.print(overview_table)
-    console.print()
-
     table = Table(title=f"TGL Episodes{f' ({year})' if year else ''}", show_header=True, header_style="bold cyan")
     table.add_column("Type", justify="center", width=4)
     table.add_column("ID", style="green", justify="right", width=6)
@@ -239,7 +248,10 @@ def list(
 
     console.print(table)
     console.print(f"\n[dim]Total: {len(episodes)} episodes[/dim]")
-    console.print(f"[dim]💡 Tip: Click on episode IDs to open in browser[/dim]\n")
+    console.print(f"[dim]💡 Tip: Click on episode IDs to open in browser[/dim]")
+
+    # Show summary at the bottom
+    show_summary()
 
 
 def parse_episode_id(episode_id_str: str) -> int:
@@ -726,7 +738,9 @@ def find_episode_gaps(cached_episodes, console_obj):
 
 
 @app.command()
-def doctor():
+def doctor(
+    section: Optional[str] = typer.Argument(None, help="Section to show: 'missing', 'gaps', 'spotify', or 'all' (default: all)")
+):
     """Diagnose issues with episode metadata and Spotify track mappings
 
     This command helps identify:
@@ -735,6 +749,20 @@ def doctor():
     """
     import json
 
+    # Normalize section argument
+    valid_sections = {'missing', 'gaps', 'spotify', 'all'}
+    if section:
+        section = section.lower()
+        if section not in valid_sections:
+            console.print(f"[red]Error: Invalid section '{section}'. Must be one of: {', '.join(sorted(valid_sections))}[/red]")
+            raise typer.Exit(1)
+    else:
+        section = 'all'
+
+    show_missing = section in ('missing', 'all')
+    show_gaps = section in ('gaps', 'all')
+    show_spotify = section in ('spotify', 'all')
+
     console.print("\n[bold cyan]" + "═" * 70)
     console.print("[bold cyan]TGL Doctor - Diagnostics Report")
     console.print("[bold cyan]" + "═" * 70 + "\n")
@@ -742,154 +770,159 @@ def doctor():
     # Load metadata cache
     cache = MetadataCache()
 
-    # Fetch current episodes from RSS
-    console.print("[cyan]Fetching episodes from RSS feed...[/cyan]")
-    fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
-    rss_episodes = fetcher.fetch_episodes()
-    console.print(f"[green]✓[/green] Found {len(rss_episodes)} episodes in RSS feed\n")
+    # Fetch current episodes from RSS (only if needed)
+    rss_episodes = []
+    if show_missing or show_gaps:
+        console.print("[cyan]Fetching episodes from RSS feed...[/cyan]")
+        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+        rss_episodes = fetcher.fetch_episodes()
+        console.print(f"[green]✓[/green] Found {len(rss_episodes)} episodes in RSS feed\n")
 
-    # Check for missing episodes
-    console.print("[bold]1. Episodes in RSS but not in metadata cache:[/bold]\n")
-
+    # Section 1: Check for missing episodes
     cached_episodes = cache.get_all_episodes()
-    cached_links = {ep.link for ep in cached_episodes}
-    missing_episodes = [ep for ep in rss_episodes if ep.link not in cached_links]
 
-    if missing_episodes:
-        console.print(f"[yellow]Found {len(missing_episodes)} missing episode(s):[/yellow]\n")
-        for ep in missing_episodes:
-            from rich.text import Text
-            episode_id_link = Text(ep.episode_id)
-            episode_id_link.stylize(f"link {ep.link}")
-            console.print("  • ", episode_id_link, f" - {ep.title}", sep="")
-            console.print(f"    [dim]Published: {ep.published}[/dim]\n")
-        console.print("[dim]Run 'tgl fetch' to update the metadata cache[/dim]\n")
-    else:
-        console.print("[green]✓ All RSS episodes are present in metadata cache[/green]\n")
+    if show_missing:
+        console.print("[bold]1. Episodes in RSS but not in metadata cache:[/bold]\n")
 
-    # Check for gaps in TGL episode numbering
-    console.print("[bold]2. Gaps in TGL episode numbering:[/bold]\n")
+        cached_links = {ep.link for ep in cached_episodes}
+        missing_episodes = [ep for ep in rss_episodes if ep.link not in cached_links]
 
-    gaps = find_episode_gaps(cached_episodes, console)
+        if missing_episodes:
+            console.print(f"[yellow]Found {len(missing_episodes)} missing episode(s):[/yellow]\n")
+            for ep in missing_episodes:
+                from rich.text import Text
+                episode_id_link = Text(ep.episode_id)
+                episode_id_link.stylize(f"link {ep.link}")
+                console.print("  • ", episode_id_link, f" - {ep.title}", sep="")
+                console.print(f"    [dim]Published: {ep.published}[/dim]\n")
+            console.print("[dim]Run 'tgl fetch' to update the metadata cache[/dim]\n")
+        else:
+            console.print("[green]✓ All RSS episodes are present in metadata cache[/green]\n")
 
-    if gaps:
-        console.print(f"[yellow]Found {len(gaps)} gap(s) in TGL episode numbering:[/yellow]\n")
+    # Section 2: Check for gaps in TGL episode numbering
+    if show_gaps:
+        console.print("[bold]2. Gaps in TGL episode numbering:[/bold]\n")
 
-        for gap in gaps:
-            from rich.text import Text
-            before = gap['before']
-            after = gap['after']
-            missing = gap['missing_numbers']
-            in_between = gap['in_between']
+        gaps = find_episode_gaps(cached_episodes, console)
 
-            if len(missing) == 1:
-                missing_str = f"E{missing[0]}"
-            elif len(missing) <= 3:
-                missing_str = ", ".join([f"E{n}" for n in missing])
+        if gaps:
+            console.print(f"[yellow]Found {len(gaps)} gap(s) in TGL episode numbering:[/yellow]\n")
+
+            for gap in gaps:
+                from rich.text import Text
+                before = gap['before']
+                after = gap['after']
+                missing = gap['missing_numbers']
+                in_between = gap['in_between']
+
+                if len(missing) == 1:
+                    missing_str = f"E{missing[0]}"
+                elif len(missing) <= 3:
+                    missing_str = ", ".join([f"E{n}" for n in missing])
+                else:
+                    missing_str = f"E{missing[0]}-E{missing[-1]} ({len(missing)} episodes)"
+
+                console.print(f"[bold cyan]Missing: {missing_str}[/bold cyan]")
+
+                # Before episode with clickable link
+                before_link = Text(before.episode_id)
+                before_link.stylize(f"link {before.link}")
+                console.print("[dim]  Before:[/dim] ", before_link, f" - {before.title[:50]}", sep="")
+                console.print(f"[dim]         Published: {before.published}[/dim]")
+
+                # After episode with clickable link
+                after_link = Text(after.episode_id)
+                after_link.stylize(f"link {after.link}")
+                console.print("[dim]  After:[/dim]  ", after_link, f" - {after.title[:50]}", sep="")
+                console.print(f"[dim]         Published: {after.published}[/dim]")
+
+                if in_between:
+                    console.print(f"\n  [yellow]Published in between ({len(in_between)} episode(s)):[/yellow]")
+                    for ep in in_between:
+                        ep_link = Text(ep.episode_id)
+                        ep_link.stylize(f"link {ep.link}")
+                        console.print("    • ", ep_link, f" ({ep.episode_type}) - {ep.title[:50]}", sep="")
+                        console.print(f"      [dim]Published: {ep.published}[/dim]")
+                else:
+                    console.print(f"\n  [dim]No episodes published in between[/dim]")
+
+                console.print()
+        else:
+            console.print("[green]✓ No gaps found in TGL episode numbering[/green]\n")
+
+    # Section 3: Check for tracks without Spotify IDs
+    if show_spotify:
+        console.print("[bold]3. Tracks without Spotify IDs:[/bold]\n")
+
+        # Load Spotify state
+        spotify_state_file = paths.data_dir / "spotify.json"
+        if not spotify_state_file.exists():
+            console.print("[yellow]No Spotify state file found (spotify.json)[/yellow]")
+            console.print("[dim]Run 'tgl spotify --year 2024' or similar to search for tracks[/dim]\n")
+        else:
+            with open(spotify_state_file, 'r') as f:
+                spotify_state = json.load(f)
+
+            track_cache = spotify_state.get('tracks', {})
+
+            # Build reverse lookup: artist|title -> spotify_id
+            def make_key(artist: str, title: str) -> str:
+                return f"{artist.lower()}|{title.lower()}"
+
+            # Collect all tracks without Spotify IDs, grouped by episode
+            episodes_with_missing = []
+
+            for episode in sorted(cache.get_all_episodes(), key=lambda e: e.id):
+                if not episode.tracklist:
+                    continue
+
+                missing_tracks = []
+                for track in episode.tracklist:
+                    # Check all possible keys (with and without variant)
+                    keys_to_check = [make_key(track.artist, track.title)]
+                    if track.variant:
+                        keys_to_check.append(make_key(track.artist, f"{track.title} {track.variant}"))
+
+                    # Check if any key has a successful match
+                    found = False
+                    for key in keys_to_check:
+                        if key in track_cache and "id" in track_cache[key]:
+                            found = True
+                            break
+
+                    if not found:
+                        missing_tracks.append(track)
+
+                if missing_tracks:
+                    episodes_with_missing.append({
+                        'episode': episode,
+                        'missing': missing_tracks
+                    })
+
+            if episodes_with_missing:
+                from rich.text import Text
+                total_missing = sum(len(item['missing']) for item in episodes_with_missing)
+                console.print(f"[yellow]Found {total_missing} track(s) without Spotify IDs across {len(episodes_with_missing)} episode(s):[/yellow]\n")
+
+                for item in episodes_with_missing:
+                    episode = item['episode']
+                    missing = item['missing']
+
+                    # Create clickable episode ID
+                    episode_id_link = Text(episode.episode_id, style="bold cyan")
+                    episode_id_link.stylize(f"link {episode.link}")
+                    console.print(episode_id_link, f" - {episode.title}", sep="")
+                    console.print(f"[dim]  Published: {episode.published}[/dim]")
+                    console.print(f"[dim]  Missing: {len(missing)}/{len(episode.tracklist)} tracks[/dim]\n")
+
+                    for i, track in enumerate(missing, 1):
+                        track_display = f"{track.artist} - {track.title}"
+                        if track.variant:
+                            track_display += f" [dim]({track.variant})[/dim]"
+                        console.print(f"  {i}. {track_display}")
+                    console.print()
             else:
-                missing_str = f"E{missing[0]}-E{missing[-1]} ({len(missing)} episodes)"
-
-            console.print(f"[bold cyan]Missing: {missing_str}[/bold cyan]")
-
-            # Before episode with clickable link
-            before_link = Text(before.episode_id)
-            before_link.stylize(f"link {before.link}")
-            console.print("[dim]  Before:[/dim] ", before_link, f" - {before.title[:50]}", sep="")
-            console.print(f"[dim]         Published: {before.published}[/dim]")
-
-            # After episode with clickable link
-            after_link = Text(after.episode_id)
-            after_link.stylize(f"link {after.link}")
-            console.print("[dim]  After:[/dim]  ", after_link, f" - {after.title[:50]}", sep="")
-            console.print(f"[dim]         Published: {after.published}[/dim]")
-
-            if in_between:
-                console.print(f"\n  [yellow]Published in between ({len(in_between)} episode(s)):[/yellow]")
-                for ep in in_between:
-                    ep_link = Text(ep.episode_id)
-                    ep_link.stylize(f"link {ep.link}")
-                    console.print("    • ", ep_link, f" ({ep.episode_type}) - {ep.title[:50]}", sep="")
-                    console.print(f"      [dim]Published: {ep.published}[/dim]")
-            else:
-                console.print(f"\n  [dim]No episodes published in between[/dim]")
-
-            console.print()
-    else:
-        console.print("[green]✓ No gaps found in TGL episode numbering[/green]\n")
-
-    # Check for tracks without Spotify IDs
-    console.print("[bold]3. Tracks without Spotify IDs:[/bold]\n")
-
-    # Load Spotify state
-    spotify_state_file = paths.data_dir / "spotify.json"
-    if not spotify_state_file.exists():
-        console.print("[yellow]No Spotify state file found (spotify.json)[/yellow]")
-        console.print("[dim]Run 'tgl spotify --year 2024' or similar to search for tracks[/dim]\n")
-        return
-
-    with open(spotify_state_file, 'r') as f:
-        spotify_state = json.load(f)
-
-    track_cache = spotify_state.get('tracks', {})
-
-    # Build reverse lookup: artist|title -> spotify_id
-    def make_key(artist: str, title: str) -> str:
-        return f"{artist.lower()}|{title.lower()}"
-
-    # Collect all tracks without Spotify IDs, grouped by episode
-    episodes_with_missing = []
-
-    for episode in sorted(cache.get_all_episodes(), key=lambda e: e.id):
-        if not episode.tracklist:
-            continue
-
-        missing_tracks = []
-        for track in episode.tracklist:
-            # Check all possible keys (with and without variant)
-            keys_to_check = [make_key(track.artist, track.title)]
-            if track.variant:
-                keys_to_check.append(make_key(track.artist, f"{track.title} {track.variant}"))
-
-            # Check if any key has a successful match
-            found = False
-            for key in keys_to_check:
-                if key in track_cache and "id" in track_cache[key]:
-                    found = True
-                    break
-
-            if not found:
-                missing_tracks.append(track)
-
-        if missing_tracks:
-            episodes_with_missing.append({
-                'episode': episode,
-                'missing': missing_tracks
-            })
-
-    if episodes_with_missing:
-        from rich.text import Text
-        total_missing = sum(len(item['missing']) for item in episodes_with_missing)
-        console.print(f"[yellow]Found {total_missing} track(s) without Spotify IDs across {len(episodes_with_missing)} episode(s):[/yellow]\n")
-
-        for item in episodes_with_missing:
-            episode = item['episode']
-            missing = item['missing']
-
-            # Create clickable episode ID
-            episode_id_link = Text(episode.episode_id, style="bold cyan")
-            episode_id_link.stylize(f"link {episode.link}")
-            console.print(episode_id_link, f" - {episode.title}", sep="")
-            console.print(f"[dim]  Published: {episode.published}[/dim]")
-            console.print(f"[dim]  Missing: {len(missing)}/{len(episode.tracklist)} tracks[/dim]\n")
-
-            for i, track in enumerate(missing, 1):
-                track_display = f"{track.artist} - {track.title}"
-                if track.variant:
-                    track_display += f" [dim]({track.variant})[/dim]"
-                console.print(f"  {i}. {track_display}")
-            console.print()
-    else:
-        console.print("[green]✓ All tracks have been found on Spotify[/green]\n")
+                console.print("[green]✓ All tracks have been found on Spotify[/green]\n")
 
     console.print("[bold cyan]" + "═" * 70)
     console.print("[bold cyan]End of Report")

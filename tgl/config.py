@@ -103,6 +103,11 @@ class TGLPaths:
         return self.data_dir / "search_index"
 
     @property
+    def audio_cache_dir(self) -> Path:
+        """Audio file cache directory (SHA1-hashed filenames)"""
+        return self.data_dir / "cache" / "audio"
+
+    @property
     def episodes_dir(self) -> Path:
         """Episodes download directory"""
         return self.data_dir / "episodes"

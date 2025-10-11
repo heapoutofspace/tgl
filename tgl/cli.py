@@ -9,6 +9,8 @@ import re
 import subprocess
 import tomllib
 import tomli_w
+import hashlib
+from urllib.parse import urlparse, urlunparse
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn, TimeRemainingColumn
 from rich.table import Table
@@ -401,6 +403,24 @@ def search(
     console.print(f"\n[dim]Showing top {min(len(results), 20)} results[/dim]\n")
 
 
+def _get_cached_audio_path(audio_url: str) -> Path:
+    """Get the cached audio file path for a given URL
+
+    Uses SHA1 hash of the URL (without query parameters) as filename.
+    """
+    # Parse URL and remove query parameters
+    parsed = urlparse(audio_url)
+    clean_url = urlunparse((parsed.scheme, parsed.netloc, parsed.path, '', '', ''))
+
+    # Generate SHA1 hash of clean URL
+    url_hash = hashlib.sha1(clean_url.encode('utf-8')).hexdigest()
+
+    # Get file extension from path (default to .mp3)
+    ext = Path(parsed.path).suffix or '.mp3'
+
+    return paths.audio_cache_dir / f"{url_hash}{ext}"
+
+
 @app.command()
 def download(
     episode_ids: Optional[List[str]] = typer.Argument(None, help="Episode IDs to download (e.g., E390 E391 B01)"),
@@ -474,6 +494,7 @@ def download(
         raise typer.Exit(1)
 
     # Create directory structure
+    paths.audio_cache_dir.mkdir(parents=True, exist_ok=True)
     paths.tgl_episodes_dir.mkdir(parents=True, exist_ok=True)
     paths.bonus_episodes_dir.mkdir(parents=True, exist_ok=True)
 
@@ -486,6 +507,7 @@ def download(
     # Download episodes with progress tracking
     downloaded_count = 0
     skipped_count = 0
+    linked_count = 0
     failed_count = 0
     durations_extracted = 0
 
@@ -503,43 +525,70 @@ def download(
         )
 
         for episode in episodes_with_audio:
-            # Determine save directory and filename
+            # Determine destination directory and filename
             if episode.episode_type == 'TGL':
-                save_dir = paths.tgl_episodes_dir
+                dest_dir = paths.tgl_episodes_dir
             else:
-                save_dir = paths.bonus_episodes_dir
+                dest_dir = paths.bonus_episodes_dir
 
             filename = f"{episode.episode_id} - {episode.title}.mp3"
             # Clean filename of invalid characters
             filename = re.sub(r'[<>:"/\\|?*]', '', filename)
-            filepath = save_dir / filename
+            dest_path = dest_dir / filename
 
-            # Check if file exists
-            if filepath.exists() and not force:
+            # Get cached file path
+            cached_path = _get_cached_audio_path(episode.audio_url)
+
+            # Check if destination exists and we're not forcing
+            if dest_path.exists() and not force:
                 progress.update(overall_task, advance=1, description=f"[yellow]Skipped {episode.episode_id}[/yellow]")
                 skipped_count += 1
                 continue
 
-            # Download the file
+            # Download to cache if not already there
+            needs_download = not cached_path.exists()
+            if needs_download:
+                try:
+                    progress.update(overall_task, description=f"[cyan]Downloading {episode.episode_id}...[/cyan]")
+
+                    response = requests.get(episode.audio_url, stream=True, timeout=30)
+                    response.raise_for_status()
+
+                    total_size = int(response.headers.get('content-length', 0))
+
+                    with open(cached_path, 'wb') as f:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            f.write(chunk)
+
+                    downloaded_count += 1
+
+                except Exception as e:
+                    progress.update(overall_task, description=f"[red]Failed {episode.episode_id}[/red]")
+                    failed_count += 1
+                    if cached_path.exists():
+                        cached_path.unlink()
+                    progress.update(overall_task, advance=1)
+                    continue
+
+            # Create hard link from cache to destination
             try:
-                progress.update(overall_task, description=f"[cyan]Downloading {episode.episode_id}...[/cyan]")
+                progress.update(overall_task, description=f"[cyan]Linking {episode.episode_id}...[/cyan]")
 
-                response = requests.get(episode.audio_url, stream=True, timeout=30)
-                response.raise_for_status()
+                # Remove existing destination if forcing
+                if dest_path.exists():
+                    dest_path.unlink()
 
-                total_size = int(response.headers.get('content-length', 0))
+                # Create hard link
+                os.link(cached_path, dest_path)
 
-                with open(filepath, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192):
-                        f.write(chunk)
+                if not needs_download:
+                    linked_count += 1
 
-                downloaded_count += 1
-
-                # Extract duration from downloaded file
+                # Extract duration from cached file
                 if MUTAGEN_AVAILABLE:
                     try:
                         from mutagen.mp3 import MP3
-                        audio = MP3(filepath)
+                        audio = MP3(cached_path)
                         if audio.info and audio.info.length:
                             # Update episode duration
                             episode.duration = PatreonPodcastFetcher("")._format_duration(int(audio.info.length))
@@ -550,10 +599,8 @@ def download(
                         pass  # Silently fail duration extraction
 
             except Exception as e:
-                progress.update(overall_task, description=f"[red]Failed {episode.episode_id}[/red]")
+                progress.update(overall_task, description=f"[red]Failed to link {episode.episode_id}[/red]")
                 failed_count += 1
-                if filepath.exists():
-                    filepath.unlink()
 
             progress.update(overall_task, advance=1)
 
@@ -564,6 +611,8 @@ def download(
     # Print summary
     console.print(f"\n[bold green]Download complete![/bold green]")
     console.print(f"  Downloaded: {downloaded_count}")
+    if linked_count > 0:
+        console.print(f"  Linked from cache: {linked_count}")
     if skipped_count > 0:
         console.print(f"  Skipped (already exists): {skipped_count}")
     if failed_count > 0:
@@ -571,6 +620,7 @@ def download(
     if durations_extracted > 0:
         console.print(f"  [cyan]Durations extracted: {durations_extracted}[/cyan]")
     console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]\n")
+    console.print(f"[dim]Audio cache: {paths.audio_cache_dir}[/dim]\n")
 
 
 @app.command()

@@ -779,9 +779,10 @@ def doctor():
             console.print(f"[dim]  Missing: {len(missing)}/{len(episode.tracklist)} tracks[/dim]\n")
 
             for i, track in enumerate(missing, 1):
-                console.print(f"  {i}. {track.artist} - {track.title}")
+                track_display = f"{track.artist} - {track.title}"
                 if track.variant:
-                    console.print(f"     [dim]({track.variant})[/dim]")
+                    track_display += f" [dim]({track.variant})[/dim]"
+                console.print(f"  {i}. {track_display}")
             console.print()
     else:
         console.print("[green]✓ All tracks have been found on Spotify[/green]\n")

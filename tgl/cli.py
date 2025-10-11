@@ -402,8 +402,27 @@ def search(
 
 
 @app.command()
-def download(episode_id: str):
-    """Download an episode audio file"""
+def download(
+    episode_ids: Optional[List[str]] = typer.Argument(None, help="Episode IDs to download (e.g., E390 E391 B01)"),
+    tgl: bool = typer.Option(False, "--tgl", help="Download all TGL episodes"),
+    bonus: bool = typer.Option(False, "--bonus", help="Download all BONUS episodes"),
+    all: bool = typer.Option(False, "--all", help="Download all episodes"),
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing files")
+):
+    """Download episode audio files
+
+    Downloads episodes to the data directory organized in tgl/ and bonus/ folders.
+    As a bonus, extracts duration metadata from downloaded files.
+
+    Examples:
+      tgl download E390           # Download single episode
+      tgl download E390 E391 B01  # Download multiple episodes
+      tgl download --tgl          # Download all TGL episodes
+      tgl download --bonus        # Download all BONUS episodes
+      tgl download --all          # Download all episodes
+    """
+    from .fetcher import PatreonPodcastFetcher, MUTAGEN_AVAILABLE
+
     cache = MetadataCache()
 
     # Auto-refresh if cache is stale or empty
@@ -415,69 +434,143 @@ def download(episode_id: str):
         console.print("[red]Error: Could not load episodes[/red]")
         raise typer.Exit(1)
 
-    # Parse episode ID
-    try:
-        numeric_id = parse_episode_id(episode_id)
-    except ValueError as e:
-        console.print(f"[red]{e}[/red]")
+    # Determine which episodes to download
+    episodes_to_download = []
+
+    if all:
+        episodes_to_download = cache.get_all_episodes()
+    elif tgl:
+        episodes_to_download = [ep for ep in cache.get_all_episodes() if ep.episode_type == 'TGL']
+    elif bonus:
+        episodes_to_download = [ep for ep in cache.get_all_episodes() if ep.episode_type == 'BONUS']
+    elif episode_ids:
+        # Parse individual episode IDs
+        for ep_id in episode_ids:
+            try:
+                numeric_id = parse_episode_id(ep_id)
+                episode = cache.get_episode(numeric_id)
+                if episode:
+                    episodes_to_download.append(episode)
+                else:
+                    console.print(f"[yellow]Warning: Episode {ep_id} not found[/yellow]")
+            except ValueError as e:
+                console.print(f"[yellow]Warning: Invalid episode ID {ep_id}[/yellow]")
+    else:
+        console.print("[red]Error: Please specify episode IDs or use --tgl, --bonus, or --all[/red]")
         raise typer.Exit(1)
 
-    episode = cache.get_episode(numeric_id)
+    if not episodes_to_download:
+        console.print("[yellow]No episodes to download[/yellow]")
+        raise typer.Exit(0)
 
-    if not episode:
-        console.print(f"[red]Episode {episode_id} not found[/red]")
+    # Filter out episodes without audio URLs
+    episodes_with_audio = [ep for ep in episodes_to_download if ep.audio_url]
+    if len(episodes_with_audio) < len(episodes_to_download):
+        missing_count = len(episodes_to_download) - len(episodes_with_audio)
+        console.print(f"[yellow]Warning: {missing_count} episode(s) have no audio URL[/yellow]")
+
+    if not episodes_with_audio:
+        console.print("[red]No episodes with audio URLs found[/red]")
         raise typer.Exit(1)
 
-    if not episode.audio_url:
-        console.print(f"[red]No audio URL found for episode {episode_id}[/red]")
-        raise typer.Exit(1)
+    # Create directory structure
+    paths.tgl_episodes_dir.mkdir(parents=True, exist_ok=True)
+    paths.bonus_episodes_dir.mkdir(parents=True, exist_ok=True)
 
-    # Create episodes directory
-    episodes_dir = Path("episodes")
-    episodes_dir.mkdir(exist_ok=True)
+    console.print(f"\n[bold cyan]Downloading {len(episodes_with_audio)} episode(s)[/bold cyan]")
+    if MUTAGEN_AVAILABLE:
+        console.print("[dim]Duration metadata will be extracted from downloaded files[/dim]\n")
+    else:
+        console.print("[dim]Install mutagen to extract duration metadata[/dim]\n")
 
-    # Create filename
-    filename = f"TGL #{episode.id} - {episode.title}.mp3"
-    # Clean filename
-    filename = re.sub(r'[<>:"/\\|?*]', '', filename)
-    filepath = episodes_dir / filename
+    # Download episodes with progress tracking
+    downloaded_count = 0
+    skipped_count = 0
+    failed_count = 0
+    durations_extracted = 0
 
-    if filepath.exists():
-        console.print(f"[yellow]File already exists: {filepath}[/yellow]")
-        if not typer.confirm("Overwrite?"):
-            raise typer.Exit(0)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console,
+    ) as progress:
+        overall_task = progress.add_task(
+            f"[cyan]Downloading episodes...",
+            total=len(episodes_with_audio)
+        )
 
-    console.print(f"\n[cyan]Downloading: {episode.full_title}[/cyan]")
-    console.print(f"[dim]Saving to: {filepath}[/dim]\n")
+        for episode in episodes_with_audio:
+            # Determine save directory and filename
+            if episode.episode_type == 'TGL':
+                save_dir = paths.tgl_episodes_dir
+            else:
+                save_dir = paths.bonus_episodes_dir
 
-    try:
-        response = requests.get(episode.audio_url, stream=True, timeout=30)
-        response.raise_for_status()
+            filename = f"{episode.episode_id} - {episode.title}.mp3"
+            # Clean filename of invalid characters
+            filename = re.sub(r'[<>:"/\\|?*]', '', filename)
+            filepath = save_dir / filename
 
-        total_size = int(response.headers.get('content-length', 0))
+            # Check if file exists
+            if filepath.exists() and not force:
+                progress.update(overall_task, advance=1, description=f"[yellow]Skipped {episode.episode_id}[/yellow]")
+                skipped_count += 1
+                continue
 
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console,
-        ) as progress:
-            task = progress.add_task("[cyan]Downloading...", total=total_size)
+            # Download the file
+            try:
+                progress.update(overall_task, description=f"[cyan]Downloading {episode.episode_id}...[/cyan]")
 
-            with open(filepath, 'wb') as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    f.write(chunk)
-                    progress.update(task, advance=len(chunk))
+                response = requests.get(episode.audio_url, stream=True, timeout=30)
+                response.raise_for_status()
 
-        console.print(f"\n[bold green]✓ Downloaded successfully![/bold green]")
-        console.print(f"[dim]Saved to: {filepath}[/dim]\n")
+                total_size = int(response.headers.get('content-length', 0))
 
-    except requests.exceptions.RequestException as e:
-        console.print(f"\n[red]Error downloading episode: {e}[/red]")
-        if filepath.exists():
-            filepath.unlink()
-        raise typer.Exit(1)
+                with open(filepath, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192):
+                        f.write(chunk)
+
+                downloaded_count += 1
+
+                # Extract duration from downloaded file
+                if MUTAGEN_AVAILABLE:
+                    try:
+                        from mutagen.mp3 import MP3
+                        audio = MP3(filepath)
+                        if audio.info and audio.info.length:
+                            # Update episode duration
+                            episode.duration = PatreonPodcastFetcher("")._format_duration(int(audio.info.length))
+                            # Update in cache
+                            cache.add_episode(episode)
+                            durations_extracted += 1
+                    except Exception:
+                        pass  # Silently fail duration extraction
+
+            except Exception as e:
+                progress.update(overall_task, description=f"[red]Failed {episode.episode_id}[/red]")
+                failed_count += 1
+                if filepath.exists():
+                    filepath.unlink()
+
+            progress.update(overall_task, advance=1)
+
+    # Save cache to persist durations
+    if durations_extracted > 0:
+        cache.save()
+
+    # Print summary
+    console.print(f"\n[bold green]Download complete![/bold green]")
+    console.print(f"  Downloaded: {downloaded_count}")
+    if skipped_count > 0:
+        console.print(f"  Skipped (already exists): {skipped_count}")
+    if failed_count > 0:
+        console.print(f"  [red]Failed: {failed_count}[/red]")
+    if durations_extracted > 0:
+        console.print(f"  [cyan]Durations extracted: {durations_extracted}[/cyan]")
+    console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]\n")
 
 
 @app.command()

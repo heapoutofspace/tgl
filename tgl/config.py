@@ -102,6 +102,21 @@ class TGLPaths:
         """Whoosh search index directory"""
         return self.data_dir / "search_index"
 
+    @property
+    def episodes_dir(self) -> Path:
+        """Episodes download directory"""
+        return self.data_dir / "episodes"
+
+    @property
+    def tgl_episodes_dir(self) -> Path:
+        """TGL episodes download directory"""
+        return self.episodes_dir / "tgl"
+
+    @property
+    def bonus_episodes_dir(self) -> Path:
+        """BONUS episodes download directory"""
+        return self.episodes_dir / "bonus"
+
     def __repr__(self) -> str:
         return f"TGLPaths(data_dir={self.data_dir}, config_file={self.config_file})"
 

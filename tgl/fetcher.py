@@ -74,19 +74,31 @@ class PatreonPodcastFetcher:
         self.parser = TracklistParser()
 
     def parse_episode_id(self, title: str) -> Optional[int]:
-        """Parse episode ID from various title formats"""
-        # Try different patterns in order of specificity
-        patterns = [
-            r'\bE\s*(\d+)\b',                          # TGL E390, TGL E 390
-            r'TGL\s*-?\s*(\d+)\b',                     # TGL 382, TGL - 382, TGL-382
-            r'(?:The\s+)?Guestlist\s*-?\s*Episode\s+(\d+)',  # The Guestlist - Episode 300, The Guestlist Episode 1
+        """Parse episode ID from various title formats
+
+        Prioritizes explicit episode numbers in title text over prefix patterns
+        """
+        # First priority: explicit "Episode ###" patterns in title text
+        explicit_patterns = [
+            r'(?:The\s+)?Gue[^-\s]*list\s*-?\s*Episode\s+(\d+)',  # The Guestlist - Episode 300 (handles typos like "Gueslist")
             r'(?:The\s+)?G-?list\s*-?\s*Episode\s+(\d+)',    # G-list - Episode 95, Guestlist - Episode 299
-            r'(?:The\s+)?Guestlist\s+(\d+)',           # The Guestlist 47, The Guestlist 101
-            r'G-?list\s+(\d+)',                        # G-list 95, Glist 82
             r'^Episode\s+(\d+)',                       # Episode 300 (at start of title)
         ]
 
-        for pattern in patterns:
+        for pattern in explicit_patterns:
+            match = re.search(pattern, title, re.IGNORECASE)
+            if match:
+                return int(match.group(1))
+
+        # Second priority: standard patterns
+        standard_patterns = [
+            r'\bE\s*(\d+)\b',                          # TGL E390, TGL E 390
+            r'TGL\s*-?\s*(\d+)\b',                     # TGL 382, TGL - 382, TGL-382
+            r'(?:The\s+)?Guestlist\s+(\d+)',           # The Guestlist 47, The Guestlist 101
+            r'G-?list\s+(\d+)',                        # G-list 95, Glist 82
+        ]
+
+        for pattern in standard_patterns:
             match = re.search(pattern, title, re.IGNORECASE)
             if match:
                 return int(match.group(1))
@@ -409,33 +421,52 @@ class PatreonPodcastFetcher:
             r'\bfrom the crates\b',
             r'\bfrom the blogs\b',
             r'\bfear of tigers\b',
+            r'\bfot\b',  # Fear of Tigers abbreviation
             r'\bre-?up\b',
             r'\btrailer\b',
             r'\binterview\b',
             r'\bextra\b',  # "The Guestlist Extra" etc.
             r'\blistening guide\b',  # "Echo Drop EP and listening guide" etc.
             r'\brunners?\s+club\b',  # "Runners Club" or "Runner Club"
+            r'\brewind\b',  # "TGL Rewind", "Bloghouse Rewind"
+            r'\bre-?edit\b',  # Re-edits
+            r'\bremix\b',  # Standalone remixes
+            r'\bguestmix\b',  # Guest mixes
+            r'\boriginal music\b',  # Original music releases
+            r'\bnew song\b',  # New song announcements
+            r'\balbum\b',  # Album announcements/releases
+            r'\bcossus\b',  # "Cossus" series (production music)
+            r'\bmaking of\b',  # "Making of" episodes
+            r'\bclassics\b',  # "Back to School Classics" and other classic compilations
+            r'\bbest of\b',  # "Best of 2019" compilations
+            r'\bcareer\b',  # Personal content like "My New Rap Career"
+            r'\bstays in\b',  # Travel content like "What goes on in Buda stays in Buda"
         ]
 
         for pattern in bonus_patterns:
             if re.search(pattern, title_lower):
                 return 'BONUS'
 
-        # TGL episode patterns
+        # TGL episode patterns - require TGL/Guestlist/G-list keywords
+        # Don't classify as TGL based solely on E### pattern
         tgl_patterns = [
-            r'\btgl\b',
+            r'\btgl\s+e\d+',  # "TGL E390" etc.
             r'\bguestlist\b',
             r'\bg-?list\b',  # Catches both "guestlist" and "g-list"
-            r'\bepisode\s+\d+',
-            r'\be[\s:]*\d+',
+            r'\bepisode\s+\d+',  # "Episode 300"
         ]
 
         for pattern in tgl_patterns:
             if re.search(pattern, title_lower):
                 return 'TGL'
 
-        # Default to TGL for ambiguous cases (most episodes are TGL)
-        return 'TGL'
+        # If title has E### but no TGL keywords, it's likely BONUS
+        # (these are often bonus episodes using the same numbering)
+        if re.search(r'\be[\s:]*\d+', title_lower):
+            return 'BONUS'
+
+        # Default to BONUS for ambiguous cases (safer to not overwrite TGL episodes)
+        return 'BONUS'
 
     def assign_episode_id(self, title: str, episode_type: str, bonus_counter: int) -> str:
         """Assign episode ID based on type

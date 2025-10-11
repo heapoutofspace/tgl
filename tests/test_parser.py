@@ -46,6 +46,40 @@ class TestEpisodeIDParsing:
             parse_episode_id("")
 
 
+class TestEpisodeTitleParsing:
+    """Tests for parsing episode IDs from full episode titles"""
+
+    @pytest.fixture
+    def fetcher(self):
+        """Create a PatreonPodcastFetcher instance for testing"""
+        return PatreonPodcastFetcher("https://example.com/rss")
+
+    def test_parse_guestlist_with_number(self, fetcher):
+        """Should parse 'The Guestlist \d+' format"""
+        assert fetcher.parse_episode_id("The Guestlist 47") == 47
+        assert fetcher.parse_episode_id("The Guestlist 62") == 62
+        assert fetcher.parse_episode_id("The Guestlist 101 - with Final DJs") == 101
+
+    def test_parse_guestlist_with_subtitle(self, fetcher):
+        """Should parse episodes with subtitles"""
+        assert fetcher.parse_episode_id("The Guestlist 71 - The Office Christmas Party!") == 71
+        assert fetcher.parse_episode_id("The Guestlist - Office Christmas Party 2019") is None  # No number in title
+
+    def test_parse_glist_with_number(self, fetcher):
+        """Should parse 'G-list \d+' format"""
+        assert fetcher.parse_episode_id("G-list 95 -Pride Special - With Lem Springsteen of Mood II Swing") == 95
+
+    def test_parse_episode_prefix(self, fetcher):
+        """Should parse 'Episode \d+' at start of title"""
+        assert fetcher.parse_episode_id("Episode 300 (WARNING_VERY STRONG LANGUAGE!)") == 300
+
+    def test_parse_guestlist_with_special_editions(self, fetcher):
+        """Should handle special edition titles"""
+        # These don't have episode numbers in the title, so should return None
+        assert fetcher.parse_episode_id("The Guestlist - I Love Europe Edition!") is None
+        assert fetcher.parse_episode_id("The Guestlist - Last of the New Fire 2024") is None
+
+
 class TestTracklistParsing:
     """Tests for tracklist parsing logic"""
 

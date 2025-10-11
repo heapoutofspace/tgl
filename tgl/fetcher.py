@@ -80,7 +80,10 @@ class PatreonPodcastFetcher:
             r'\bE\s*(\d+)\b',                          # TGL E390, TGL E 390
             r'TGL\s*-?\s*(\d+)\b',                     # TGL 382, TGL - 382, TGL-382
             r'(?:The\s+)?Guestlist\s*-?\s*Episode\s+(\d+)',  # The Guestlist - Episode 300, The Guestlist Episode 1
-            r'(?:The\s+)?G-?list\s*-?\s*Episode?\s*(\d+)',   # G-list 95, Guestlist - Episode 299
+            r'(?:The\s+)?G-?list\s*-?\s*Episode\s+(\d+)',    # G-list - Episode 95, Guestlist - Episode 299
+            r'(?:The\s+)?Guestlist\s+(\d+)',           # The Guestlist 47, The Guestlist 101
+            r'G-?list\s+(\d+)',                        # G-list 95, Glist 82
+            r'^Episode\s+(\d+)',                       # Episode 300 (at start of title)
         ]
 
         for pattern in patterns:

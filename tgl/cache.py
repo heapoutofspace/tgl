@@ -121,6 +121,9 @@ class MetadataCache:
     def refresh(self, fetcher: 'PatreonPodcastFetcher'):
         """Refresh cache by fetching latest episodes
 
+        Removes cached episodes that are in the RSS feed (to handle reclassification),
+        but preserves episodes that are no longer in the RSS feed (archived content).
+
         Args:
             fetcher: PatreonPodcastFetcher instance to use for fetching
         """
@@ -131,10 +134,29 @@ class MetadataCache:
         episodes = fetcher.fetch_episodes()
 
         if episodes:
+            # Get links from RSS feed
+            rss_links = {ep.link for ep in episodes}
+
+            # Find episodes in cache that are no longer in RSS (archived episodes)
+            archived_episodes = {
+                ep_id: ep for ep_id, ep in self.episodes.items()
+                if ep.link not in rss_links
+            }
+
+            if archived_episodes:
+                console.print(f"[dim]Preserving {len(archived_episodes)} archived episode(s) not in RSS feed[/dim]")
+
+            # Clear cache and rebuild with archived episodes
+            self.episodes = archived_episodes.copy()
+
+            # Add fresh episodes from RSS feed
             for episode in episodes:
                 self.add_episode(episode)
+
             self.save()
-            console.print(f"[green]✓[/green] Cache refreshed with {len(episodes)} episodes")
+            console.print(f"[green]✓[/green] Cache refreshed with {len(episodes)} episodes from RSS")
+            if archived_episodes:
+                console.print(f"[dim]Total cached: {len(self.episodes)} episodes ({len(archived_episodes)} archived)[/dim]")
 
             # Rebuild search index
             console.print("[cyan]Building search index...[/cyan]")

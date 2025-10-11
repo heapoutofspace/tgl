@@ -164,7 +164,11 @@ def list(
         episodes.sort(key=lambda ep: ep.id)
     elif bonus and not tgl:
         episodes = [ep for ep in episodes if ep.episode_type == 'BONUS']
-    # If both or neither, show all (keep date sort)
+        # Reverse to show oldest first
+        episodes = episodes[::-1]
+    else:
+        # Show all episodes, oldest first
+        episodes = episodes[::-1]
 
     if not episodes:
         console.print(f"[yellow]No episodes found[/yellow]")

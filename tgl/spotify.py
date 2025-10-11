@@ -27,66 +27,45 @@ class IntegratedCacheHandler(CacheHandler):
 
     This integrates the OAuth token cache with our main Spotify state file,
     eliminating the need for a separate .spotify_cache file.
+
+    Uses the SpotifyManager's in-memory state to avoid conflicts between
+    the cache handler and the manager's state.
     """
 
-    def __init__(self, state_file: Path):
+    def __init__(self, state_dict: Dict, state_file: Path):
         """Initialize cache handler
 
         Args:
-            state_file: Path to spotify.json file
+            state_dict: Reference to SpotifyManager's in-memory state dict
+            state_file: Path to spotify.json file (for persistence)
         """
+        self.state = state_dict
         self.state_file = state_file
 
     def get_cached_token(self) -> Optional[Dict]:
-        """Get cached OAuth token from spotify.json
+        """Get cached OAuth token from in-memory state
 
         Returns:
             Token info dict or None if not found
         """
-        if not self.state_file.exists():
-            return None
-
-        try:
-            with open(self.state_file, 'r') as f:
-                state = json.load(f)
-                return state.get('oauth_token')
-        except (json.JSONDecodeError, IOError):
-            return None
+        return self.state.get('oauth_token')
 
     def save_token_to_cache(self, token_info: Dict):
-        """Save OAuth token to spotify.json
+        """Save OAuth token to in-memory state and persist to file
 
         Args:
             token_info: Token info dict from Spotify OAuth
         """
-        # Load existing state
-        if self.state_file.exists():
-            try:
-                with open(self.state_file, 'r') as f:
-                    state = json.load(f)
-            except (json.JSONDecodeError, IOError):
-                state = self._empty_state()
-        else:
-            state = self._empty_state()
+        # Update in-memory state
+        self.state['oauth_token'] = token_info
 
-        # Update oauth token
-        state['oauth_token'] = token_info
-
-        # Save state
+        # Persist to file immediately
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.state_file, 'w') as f:
-                json.dump(state, f, indent=2)
+                json.dump(self.state, f, indent=2)
         except IOError as e:
             console.print(f"[red]Error saving OAuth token: {e}[/red]")
-
-    def _empty_state(self) -> Dict:
-        """Return empty state structure"""
-        return {
-            "tracks": {},
-            "playlists": {},
-            "oauth_token": None
-        }
 
 
 class SpotifyManager:
@@ -201,7 +180,8 @@ class SpotifyManager:
         if self._user_client is None:
             scope = "playlist-modify-public playlist-modify-private playlist-read-private ugc-image-upload"
             # Use integrated cache handler that stores tokens in spotify.json
-            cache_handler = IntegratedCacheHandler(self.state_file)
+            # Pass in-memory state to ensure consistency
+            cache_handler = IntegratedCacheHandler(self.state, self.state_file)
             auth_manager = SpotifyOAuth(
                 client_id=self.settings.spotify_client_id,
                 client_secret=self.settings.spotify_client_secret,

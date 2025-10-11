@@ -677,6 +677,120 @@ def spotify(
         raise typer.Exit(1)
 
 
+@app.command()
+def doctor():
+    """Diagnose issues with episode metadata and Spotify track mappings
+
+    This command helps identify:
+    - Episodes available in RSS feed but missing from metadata cache
+    - Tracks in metadata that couldn't be found on Spotify
+    """
+    from datetime import datetime
+    import json
+
+    console.print("\n[bold cyan]" + "═" * 70)
+    console.print("[bold cyan]TGL Doctor - Diagnostics Report")
+    console.print("[bold cyan]" + "═" * 70 + "\n")
+
+    # Load metadata cache
+    cache = MetadataCache()
+
+    # Fetch current episodes from RSS
+    console.print("[cyan]Fetching episodes from RSS feed...[/cyan]")
+    fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+    rss_episodes = fetcher.fetch_episodes()
+    console.print(f"[green]✓[/green] Found {len(rss_episodes)} episodes in RSS feed\n")
+
+    # Check for missing episodes
+    console.print("[bold]1. Episodes in RSS but not in metadata cache:[/bold]\n")
+
+    cached_links = {ep.link for ep in cache.get_all_episodes()}
+    missing_episodes = [ep for ep in rss_episodes if ep.link not in cached_links]
+
+    if missing_episodes:
+        console.print(f"[yellow]Found {len(missing_episodes)} missing episode(s):[/yellow]\n")
+        for ep in missing_episodes:
+            console.print(f"  • {ep.episode_id} - {ep.title}")
+            console.print(f"    [dim]Published: {ep.published}[/dim]")
+            console.print(f"    [dim]Link: {ep.link}[/dim]\n")
+        console.print("[dim]Run 'tgl fetch' to update the metadata cache[/dim]\n")
+    else:
+        console.print("[green]✓ All RSS episodes are present in metadata cache[/green]\n")
+
+    # Check for tracks without Spotify IDs
+    console.print("[bold]2. Tracks without Spotify IDs:[/bold]\n")
+
+    # Load Spotify state
+    spotify_state_file = paths.data_dir / "spotify.json"
+    if not spotify_state_file.exists():
+        console.print("[yellow]No Spotify state file found (spotify.json)[/yellow]")
+        console.print("[dim]Run 'tgl spotify --year 2024' or similar to search for tracks[/dim]\n")
+        return
+
+    with open(spotify_state_file, 'r') as f:
+        spotify_state = json.load(f)
+
+    track_cache = spotify_state.get('tracks', {})
+
+    # Build reverse lookup: artist|title -> spotify_id
+    def make_key(artist: str, title: str) -> str:
+        return f"{artist.lower()}|{title.lower()}"
+
+    # Collect all tracks without Spotify IDs, grouped by episode
+    episodes_with_missing = []
+
+    for episode in sorted(cache.get_all_episodes(), key=lambda e: e.published):
+        if not episode.tracklist:
+            continue
+
+        missing_tracks = []
+        for track in episode.tracklist:
+            # Check all possible keys (with and without variant)
+            keys_to_check = [make_key(track.artist, track.title)]
+            if track.variant:
+                keys_to_check.append(make_key(track.artist, f"{track.title} {track.variant}"))
+
+            # Check if any key has a successful match
+            found = False
+            for key in keys_to_check:
+                if key in track_cache and "id" in track_cache[key]:
+                    found = True
+                    break
+
+            if not found:
+                missing_tracks.append(track)
+
+        if missing_tracks:
+            episodes_with_missing.append({
+                'episode': episode,
+                'missing': missing_tracks
+            })
+
+    if episodes_with_missing:
+        total_missing = sum(len(item['missing']) for item in episodes_with_missing)
+        console.print(f"[yellow]Found {total_missing} track(s) without Spotify IDs across {len(episodes_with_missing)} episode(s):[/yellow]\n")
+
+        for item in episodes_with_missing:
+            episode = item['episode']
+            missing = item['missing']
+
+            console.print(f"[bold cyan]{episode.episode_id}[/bold cyan] - {episode.title}")
+            console.print(f"[dim]  Published: {episode.published}[/dim]")
+            console.print(f"[dim]  Missing: {len(missing)}/{len(episode.tracklist)} tracks[/dim]\n")
+
+            for i, track in enumerate(missing, 1):
+                console.print(f"  {i}. {track.artist} - {track.title}")
+                if track.variant:
+                    console.print(f"     [dim]({track.variant})[/dim]")
+            console.print()
+    else:
+        console.print("[green]✓ All tracks have been found on Spotify[/green]\n")
+
+    console.print("[bold cyan]" + "═" * 70)
+    console.print("[bold cyan]End of Report")
+    console.print("[bold cyan]" + "═" * 70 + "\n")
+
+
 # Config command group
 config_app = typer.Typer(help="Manage TGL configuration")
 app.add_typer(config_app, name="config")

@@ -534,13 +534,42 @@ def download(
             # Get cached file path
             cached_path = _get_cached_audio_path(episode.audio_url)
 
-            # Check if destination exists and we're not forcing
+            # Check if we should skip (destination exists and file is correct)
+            should_skip = False
             if dest_path.exists() and not force:
+                # Verify file size matches RSS feed if available
+                if episode.audio_size:
+                    actual_size = dest_path.stat().st_size
+                    if actual_size != episode.audio_size:
+                        # File size mismatch, need to re-download
+                        progress.update(overall_task, description=f"[yellow]Size mismatch for {episode.episode_id}, re-downloading[/yellow]")
+                        dest_path.unlink()
+                        if cached_path.exists():
+                            cached_path.unlink()
+                    else:
+                        should_skip = True
+                else:
+                    # No size info, assume file is correct
+                    should_skip = True
+
+            # If skipping, still check duration and extract if missing
+            if should_skip:
+                if not episode.duration and cached_path.exists() and MUTAGEN_AVAILABLE:
+                    try:
+                        from mutagen.mp3 import MP3
+                        audio = MP3(cached_path)
+                        if audio.info and audio.info.length:
+                            episode.duration = PatreonPodcastFetcher("")._format_duration(int(audio.info.length))
+                            cache.add_episode(episode)
+                            stats['durations'] += 1
+                    except Exception:
+                        pass
+
                 progress.update(overall_task, advance=1, description=f"[yellow]Skipped {episode.episode_id}[/yellow]")
                 stats['skipped'] += 1
                 return
 
-            # Download to cache if not already there
+            # Download to cache if not already there (or if we need to re-download)
             needs_download = not cached_path.exists()
             if needs_download:
                 try:
@@ -612,8 +641,8 @@ def download(
                 if not needs_download:
                     stats['linked'] += 1
 
-                # Extract duration from cached file
-                if MUTAGEN_AVAILABLE:
+                # Extract duration from cached file if missing
+                if not episode.duration and MUTAGEN_AVAILABLE:
                     try:
                         from mutagen.mp3 import MP3
                         audio = MP3(cached_path)

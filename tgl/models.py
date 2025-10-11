@@ -28,6 +28,7 @@ class Episode(BaseModel):
     year: Optional[int] = None
     link: str
     audio_url: Optional[str] = None
+    audio_size: Optional[int] = None  # Audio file size in bytes (from RSS feed)
     episode_type: str = 'TGL'  # 'TGL' or 'BONUS'
     duration: Optional[str] = None  # Episode duration (e.g., "1:23:45" or "45:30")
 

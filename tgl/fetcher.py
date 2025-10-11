@@ -628,11 +628,18 @@ class PatreonPodcastFetcher:
                     year = published_parsed.tm_year
                     published = time.strftime('%Y-%m-%d', published_parsed)
 
-                # Get audio URL and duration
+                # Get audio URL, file size, and duration
                 audio_url = None
+                audio_size = None
                 duration = None
                 if hasattr(entry, 'enclosures') and entry.enclosures:
                     audio_url = entry.enclosures[0].get('href')
+                    # Get file size if available (in bytes)
+                    if 'length' in entry.enclosures[0]:
+                        try:
+                            audio_size = int(entry.enclosures[0]['length'])
+                        except (ValueError, TypeError):
+                            pass
 
                 # Try to get duration from itunes:duration first
                 if hasattr(entry, 'itunes_duration'):
@@ -669,6 +676,7 @@ class PatreonPodcastFetcher:
                     'year': year,
                     'link': entry.get('link', ''),
                     'audio_url': audio_url,
+                    'audio_size': audio_size,
                     'duration': duration,
                     'description': raw_description,
                     'description_text': description_text,
@@ -726,6 +734,7 @@ class PatreonPodcastFetcher:
                     year=ep_data['year'],
                     link=ep_data['link'],
                     audio_url=ep_data['audio_url'],
+                    audio_size=ep_data['audio_size'],
                     episode_type=episode_type,
                     duration=ep_data['duration']
                 )

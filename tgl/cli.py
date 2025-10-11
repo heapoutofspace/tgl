@@ -752,9 +752,21 @@ def download(
             ep = failure['episode']
             error = failure['error']
             url = failure['url']
-            console.print(f"\n  [red]•[/red] [bold]{ep.episode_id}[/bold] - {ep.title}")
+
+            # Create clickable episode ID
+            clickable_id = Text(ep.episode_id)
+            clickable_id.stylize(f"link {ep.link}")
+
+            # Build the episode line with clickable ID
+            episode_line = Text()
+            episode_line.append("  ", style="red")
+            episode_line.append("• ", style="red")
+            episode_line.append(clickable_id, style="bold")
+            episode_line.append(f" - {ep.title}")
+
+            console.print(episode_line)
             console.print(f"    [dim]Error:[/dim] {error}")
-            console.print(f"    [dim]URL:[/dim] [link={url}]{url[:80]}{'...' if len(url) > 80 else ''}[/link]")
+            console.print(f"    [dim]Audio URL:[/dim] [link={url}]{url[:80]}{'...' if len(url) > 80 else ''}[/link]")
 
     console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]")
     console.print(f"[dim]Audio cache: {paths.audio_cache_dir}[/dim]\n")

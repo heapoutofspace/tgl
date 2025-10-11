@@ -807,13 +807,13 @@ def doctor(
                 # Before episode with clickable link
                 before_link = Text(before.episode_id)
                 before_link.stylize(f"link {before.link}")
-                console.print("[dim]  Before:[/dim] ", before_link, f" - {before.title[:50]}", sep="")
+                console.print("[dim]  Before:[/dim] ", before_link, f" - {before.title}", sep="")
                 console.print(f"[dim]         Published: {before.published}[/dim]")
 
                 # After episode with clickable link
                 after_link = Text(after.episode_id)
                 after_link.stylize(f"link {after.link}")
-                console.print("[dim]  After:[/dim]  ", after_link, f" - {after.title[:50]}", sep="")
+                console.print("[dim]  After:[/dim]  ", after_link, f" - {after.title}", sep="")
                 console.print(f"[dim]         Published: {after.published}[/dim]")
 
                 if in_between:
@@ -821,7 +821,7 @@ def doctor(
                     for ep in in_between:
                         ep_link = Text(ep.episode_id)
                         ep_link.stylize(f"link {ep.link}")
-                        console.print("    • ", ep_link, f" ({ep.episode_type}) - {ep.title[:50]}", sep="")
+                        console.print("    • ", ep_link, f" ({ep.episode_type}) - {ep.title}", sep="")
                         console.print(f"      [dim]Published: {ep.published}[/dim]")
                 else:
                     console.print(f"\n  [dim]No episodes published in between[/dim]")

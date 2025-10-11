@@ -271,37 +271,6 @@ def list(
     show_summary()
 
 
-def parse_episode_id(episode_id_str: str) -> int:
-    """Parse episode ID string to internal numeric ID
-
-    Accepts:
-    - Plain numbers: "390" -> 390 (TGL episode)
-    - E prefix: "E390" -> 390 (TGL episode)
-    - B prefix: "B05" -> 10005 (BONUS episode, 10000 + 5)
-    """
-    episode_id_str = episode_id_str.strip().upper()
-
-    if episode_id_str.startswith('E'):
-        # TGL episode
-        try:
-            return int(episode_id_str[1:])
-        except ValueError:
-            raise ValueError(f"Invalid episode ID format: {episode_id_str}")
-    elif episode_id_str.startswith('B'):
-        # BONUS episode
-        try:
-            b_number = int(episode_id_str[1:])
-            return 10000 + b_number
-        except ValueError:
-            raise ValueError(f"Invalid episode ID format: {episode_id_str}")
-    else:
-        # Plain number, assume TGL episode
-        try:
-            return int(episode_id_str)
-        except ValueError:
-            raise ValueError(f"Invalid episode ID format: {episode_id_str}")
-
-
 @app.command(name="info")
 @app.command(name="show")
 def info(episode_id: str):

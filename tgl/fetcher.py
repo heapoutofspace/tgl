@@ -708,7 +708,20 @@ class PatreonPodcastFetcher:
                     if numeric_id is None:
                         # Try to use inferred number
                         numeric_id = inferred_numbers.get(ep_data['link'], 0)
-                    episode_id_str = f"E{numeric_id}" if numeric_id > 0 else "E???"
+
+                    # Special handling for duplicate episode IDs (historical errors)
+                    # These are hardcoded exceptions to fix known duplicates in the podcast's history
+                    if 'The Best of 2019 - Listeners Choice' in ep_data['title'] and numeric_id == 119:
+                        # E119 "The Best of 2019 - Listeners Choice" -> E118
+                        numeric_id = 118
+                        episode_id_str = "E118"
+                    elif 'Old School Delight' in ep_data['title'] and numeric_id == 126:
+                        # E126 "Old School Delight" -> E126.5 (special number)
+                        # Use unique numeric_id 12650 to represent 126.5 (avoids conflicts with E126)
+                        numeric_id = 12650
+                        episode_id_str = "E126.5"
+                    else:
+                        episode_id_str = f"E{numeric_id}" if numeric_id > 0 else "E???"
                 else:
                     # BONUS episodes use sequential numbering with offset to avoid conflicts
                     # Use 10000 + sequence number as the internal numeric ID

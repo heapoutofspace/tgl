@@ -143,10 +143,12 @@ class Episode(BaseModel):
     published: str  # ISO date format
     year: Optional[int] = None
     link: str  # RSS item link (unique identifier)
+    guid: Optional[str] = None  # RSS guid for stable episode identity
     audio_url: Optional[str] = None
     audio_size: Optional[int] = None  # Audio file size in bytes (from RSS feed)
     episode_type: str = 'TGL'  # 'TGL' or 'BONUS'
     duration: Optional[str] = None  # Episode duration (e.g., "1:23:45")
+    manual_overrides: Set[str] = Field(default_factory=set)  # Track manually set fields
 ```
 
 ### Core Classes
@@ -178,9 +180,11 @@ Enhanced parsing with prose detection:
 
 #### MetadataCache (`cache.py`)
 - Persistent episode metadata in platform-specific location
-- Fast lookups by ID or year
+- **Cache keyed by GUID** (RSS guid) for stable identity across episode ID changes
+- Fast lookups by episode ID or GUID using `find_episode_by_id_or_guid()` helper
 - Pydantic serialization for type safety
 - Auto-refresh when stale (1 hour)
+- Tracks manual overrides to preserve user changes during cache refresh
 
 #### StateManager (`state.py`)
 Production vs dryrun state files in platform-specific directories
@@ -206,9 +210,24 @@ tgl list [--year YEAR] [--tgl] [--bonus] [--summary]
 - Displays episode type (🎧 TGL, 🎁 BONUS)
 - Clickable episode IDs that open Patreon posts
 
-**info/show** - Display detailed episode information
+**get** - Get episode metadata (supports GUIDs)
 ```bash
-tgl info EPISODE_ID
+tgl get EPISODE_ID [FIELD]    # Show all metadata or specific field
+tgl get E390                   # Show all metadata
+tgl get E390 title             # Get specific field
+tgl get 45962766               # Lookup by GUID
+```
+
+**set** - Set episode metadata field (supports GUIDs)
+```bash
+tgl set EPISODE_ID FIELD VALUE
+tgl set E390 title "New Title"
+tgl set E390 episode_type BONUS  # Changes type and recalculates ID
+```
+
+**info/show** - Backward compatibility aliases for `get`
+```bash
+tgl info EPISODE_ID    # Deprecated, use 'tgl get' instead
 ```
 
 **search** - Full-text search across episodes, tracks, and artists

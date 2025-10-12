@@ -79,6 +79,71 @@ class TestEpisodeTitleParsing:
         assert fetcher.parse_episode_id("The Guestlist - I Love Europe Edition!") is None
         assert fetcher.parse_episode_id("The Guestlist - Last of the New Fire 2024") is None
 
+    def test_parse_problematic_titles(self, fetcher):
+        """Should parse episode IDs from previously missed titles"""
+        # Episode 177 - has explicit "Episode" format
+        assert fetcher.parse_episode_id("The Guestlist - Episode 177: Be kind rewind") == 177
+
+        # Episode 221 - TGL221 without space
+        assert fetcher.parse_episode_id("TGL221: From Tromso With Love") == 221
+
+        # Episodes 169 and 170 - dash-separated format (regression test for issue #E169/#E170)
+        assert fetcher.parse_episode_id("The Guestlist - 169") == 169
+        assert fetcher.parse_episode_id("The Guestlist - 170: Happy New Year!") == 170
+        assert fetcher.parse_episode_id("Guestlist - 150") == 150
+
+        # Episode 122 - TGL with space
+        assert fetcher.parse_episode_id("TGL 122: STORMAGGEDEON!") == 122
+
+        # Episode 242 - TGL: E242 format
+        assert fetcher.parse_episode_id("TGL: E242 - Pure Flames Rewind") == 242
+
+        # Episode 25 - TGL E25 format
+        assert fetcher.parse_episode_id("TGL E25: What goes on in Buda stays in Buda...") == 25
+
+        # Episode 282 - TGL E282 format
+        assert fetcher.parse_episode_id("TGL E282: Dark Disco Rewind") == 282
+
+        # Episode 352 - TGL E352 format
+        assert fetcher.parse_episode_id("TGL E352: Rewind, Rewind, Rewind!") == 352
+
+
+class TestEpisodeClassification:
+    """Tests for episode type classification (TGL vs BONUS)"""
+
+    @pytest.fixture
+    def fetcher(self):
+        """Create a PatreonPodcastFetcher instance for testing"""
+        return PatreonPodcastFetcher("https://example.com/rss")
+
+    def test_classify_tgl_with_numbers(self, fetcher):
+        """Episodes with TGL and episode numbers should be TGL"""
+        # These have explicit episode numbers and should be TGL
+        assert fetcher.classify_episode_type("The Guestlist - Episode 177: Be kind rewind") == 'TGL'
+        assert fetcher.classify_episode_type("TGL221: From Tromso With Love") == 'TGL'
+        assert fetcher.classify_episode_type("TGL 122: STORMAGGEDEON!") == 'TGL'
+        assert fetcher.classify_episode_type("TGL: E242 - Pure Flames Rewind") == 'TGL'
+        assert fetcher.classify_episode_type("TGL E25: What goes on in Buda stays in Buda...") == 'TGL'
+        assert fetcher.classify_episode_type("TGL E282: Dark Disco Rewind") == 'TGL'
+        assert fetcher.classify_episode_type("TGL E352: Rewind, Rewind, Rewind!") == 'TGL'
+
+        # Dash-separated format (regression test for issue #E169/#E170)
+        assert fetcher.classify_episode_type("The Guestlist - 169") == 'TGL'
+        assert fetcher.classify_episode_type("The Guestlist - 170: Happy New Year!") == 'TGL'
+        assert fetcher.classify_episode_type("Guestlist - 150") == 'TGL'
+
+        # TGL dash-separated format (regression test for E169 misclassification)
+        assert fetcher.classify_episode_type("TGL - 169: Tiger Blood!") == 'TGL'
+        assert fetcher.classify_episode_type("TGL - 169: Tiger Blood! (the new Fear of Tigers album)") == 'TGL'
+        assert fetcher.classify_episode_type("TGL-169") == 'TGL'
+
+    def test_classify_bonus_without_numbers(self, fetcher):
+        """Episodes without TGL/episode numbers should be BONUS"""
+        assert fetcher.classify_episode_type("From The Crates - Euphoric Piano House 1994-1995") == 'BONUS'
+        assert fetcher.classify_episode_type("Fear of Tigers - That's My Why") == 'BONUS'
+        assert fetcher.classify_episode_type("Hyperpop Bangers!") == 'BONUS'
+        assert fetcher.classify_episode_type("Fear of Tigers - Looking For The Truth") == 'BONUS'
+
 
 class TestTracklistParsing:
     """Tests for tracklist parsing logic"""

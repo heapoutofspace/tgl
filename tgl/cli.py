@@ -58,7 +58,8 @@ def main(ctx: typer.Context):
         console.print("[bold]Available Commands:[/bold]\n")
 
         console.print("  [cyan]list[/cyan]                 List all episodes")
-        console.print("  [cyan]info[/cyan]                 Show details for a specific episode")
+        console.print("  [cyan]get[/cyan]                  Get episode metadata")
+        console.print("  [cyan]set[/cyan]                  Set episode metadata field")
         console.print("  [cyan]search[/cyan]               Search episodes by title, description, or tracks")
         console.print("  [cyan]download[/cyan]             Download an episode audio file")
         console.print("  [cyan]spotify[/cyan]              Import tracklists to Spotify playlist")
@@ -72,26 +73,56 @@ def main(ctx: typer.Context):
         console.print("  [dim]# List only TGL episodes from 2023[/dim]")
         console.print("  [green]tgl.py list --year 2023 --tgl[/green]\n")
 
-        console.print("  [dim]# List only BONUS episodes[/dim]")
-        console.print("  [green]tgl.py list --bonus[/green]\n")
+        console.print("  [dim]# Show metadata for episode 390[/dim]")
+        console.print("  [green]tgl.py get E390[/green]\n")
 
-        console.print("  [dim]# Show details for episode 390[/dim]")
-        console.print("  [green]tgl.py info E390[/green]\n")
+        console.print("  [dim]# Get specific field (supports GUIDs too)[/dim]")
+        console.print("  [green]tgl.py get E390 title[/green]\n")
 
-        console.print("  [dim]# Show details for bonus episode 5[/dim]")
-        console.print("  [green]tgl.py info B05[/green]\n")
+        console.print("  [dim]# Change episode metadata[/dim]")
+        console.print("  [green]tgl.py set E390 title \"New Title\"[/green]\n")
 
         console.print("  [dim]# Search for episodes about house music[/dim]")
         console.print("  [green]tgl.py search \"house music\"[/green]\n")
-
-        console.print("  [dim]# Search for episodes with tracks by LAU[/dim]")
-        console.print("  [green]tgl.py search LAU[/green]\n")
 
         console.print("  [dim]# Update the episode cache[/dim]")
         console.print("  [green]tgl.py update[/green]\n")
 
         console.print("[dim]For detailed help on any command, use:[/dim]")
         console.print("  [green]tgl.py [command] --help[/green]\n")
+
+# ═══════════════════════════════════════════════════════════════════════
+# Helper Functions
+# ═══════════════════════════════════════════════════════════════════════
+
+def find_episode_by_id_or_guid(episodes: list, identifier: str):
+    """Find an episode by episode_id or guid
+
+    Args:
+        episodes: List of Episode objects
+        identifier: Episode ID (e.g., E390, B05) or GUID
+
+    Returns:
+        Tuple of (episode, index) if found, (None, None) if not found
+    """
+    identifier_upper = identifier.upper()
+
+    # Try to find by episode_id first
+    for idx, ep in enumerate(episodes):
+        if ep.episode_id == identifier_upper:
+            return ep, idx
+
+    # Try to find by guid
+    for idx, ep in enumerate(episodes):
+        if ep.guid == identifier:
+            return ep, idx
+
+    return None, None
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# Commands
+# ═══════════════════════════════════════════════════════════════════════
 
 @app.command(name="update")
 def update_cache():
@@ -271,61 +302,271 @@ def list(
     show_summary()
 
 
-@app.command(name="info")
-@app.command(name="show")
-def info(episode_id: str):
-    """Show details for a specific episode"""
+@app.command()
+def get(
+    episode_id: str = typer.Argument(..., help="Episode ID (e.g., E390, B05) or GUID"),
+    field: Optional[str] = typer.Argument(None, help="Specific field to get (optional)"),
+):
+    """Get episode metadata
+
+    Show all metadata for an episode, or a specific field if specified.
+    Accepts episode IDs (E390, B05) or GUIDs.
+
+    Examples:
+        tgl get E390           # Show all metadata
+        tgl get E390 title     # Show just the title
+        tgl get B05 episode_type  # Show episode type
+        tgl get 45962766       # Find by GUID
+    """
+    from .cache import MetadataCache
+    import json
+
     cache = MetadataCache()
+    episodes = cache.get_all_episodes()
 
-    # Auto-refresh if cache is stale or empty
-    if cache.should_auto_refresh():
-        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
-        cache.refresh(fetcher)
-
-    if not cache.episodes:
-        console.print("[red]Error: Could not load episodes[/red]")
-        raise typer.Exit(1)
-
-    # Parse episode ID
-    try:
-        numeric_id = parse_episode_id(episode_id)
-    except ValueError as e:
-        console.print(f"[red]{e}[/red]")
-        raise typer.Exit(1)
-
-    episode = cache.get_episode(numeric_id)
+    # Find the episode by ID or GUID
+    episode, _ = find_episode_by_id_or_guid(episodes, episode_id)
 
     if not episode:
         console.print(f"[red]Episode {episode_id} not found[/red]")
         raise typer.Exit(1)
 
-    # Display episode info with clickable ID
-    clickable_id = f"[link={episode.link}]{episode.episode_id}[/link]"
-    console.print(f"\n[bold cyan]{clickable_id}:[/bold cyan] [bold white]{episode.title}[/bold white]")
-    duration_info = f" | Duration: {episode.duration}" if episode.duration else ""
-    console.print(f"[dim]Published: {episode.published}{duration_info}[/dim]")
+    # If field specified, show just that field
+    if field:
+        if not hasattr(episode, field):
+            console.print(f"[red]Field '{field}' does not exist[/red]")
+            console.print(f"[dim]Available fields: {', '.join(episode.model_fields.keys())}[/dim]")
+            raise typer.Exit(1)
 
-    # Display description text
-    if episode.description_text:
-        console.print(f"\n[bold]Description:[/bold]")
-        # Limit to first 500 chars to keep it concise
-        desc = episode.description_text
-        if len(desc) > 500:
-            desc = desc[:500] + "..."
-        console.print(f"[dim]{desc}[/dim]")
+        value = getattr(episode, field)
+        is_manual = field in episode.manual_overrides
 
-    # Display structured tracklist
+        console.print(f"\n[bold]{episode.episode_id}[/bold] - [cyan]{field}[/cyan]:")
+        # Handle different value types
+        if value is None:
+            console.print(f"  [dim]None[/dim]")
+        elif isinstance(value, str):
+            console.print(f"  {value}")
+        elif isinstance(value, (int, float, bool)):
+            console.print(f"  {value}")
+        else:
+            # For lists, dicts, sets, and other complex types
+            console.print(json.dumps(value, indent=2, default=str))
+
+        if is_manual:
+            console.print(f"  [yellow]⚠ Manually overridden[/yellow]")
+        console.print()
+        return
+
+    # Show all metadata
+    console.print(f"\n[bold cyan]═══ Episode Metadata: {episode.episode_id} ═══[/bold cyan]\n")
+
+    # Format fields nicely
+    fields_to_show = [
+        ('episode_id', 'Episode ID'),
+        ('id', 'Internal ID'),
+        ('title', 'Title'),
+        ('episode_type', 'Type'),
+        ('published', 'Published'),
+        ('year', 'Year'),
+        ('duration', 'Duration'),
+        ('link', 'Patreon Link'),
+        ('guid', 'RSS GUID'),
+        ('audio_url', 'Audio URL'),
+        ('audio_size', 'Audio Size (bytes)'),
+    ]
+
+    for field_name, label in fields_to_show:
+        value = getattr(episode, field_name)
+        is_manual = field_name in episode.manual_overrides
+        manual_indicator = " [yellow]⚠[/yellow]" if is_manual else ""
+
+        if value is not None:
+            if field_name == 'link':
+                console.print(f"[cyan]{label}:{manual_indicator}[/cyan] [link={value}]{value}[/link]")
+            elif field_name == 'audio_url' and value:
+                short_url = value[:60] + "..." if len(value) > 60 else value
+                console.print(f"[cyan]{label}:{manual_indicator}[/cyan] {short_url}")
+            else:
+                console.print(f"[cyan]{label}:{manual_indicator}[/cyan] {value}")
+
+    # Show tracklist count
     if episode.tracklist:
-        console.print(f"\n[bold]Tracklist ({len(episode.tracklist)} tracks):[/bold]")
-        for i, track in enumerate(episode.tracklist, 1):
-            track_display = f"  {i:3d}. {track.artist} - {track.title}"
-            if track.variant:
-                track_display += f" [dim]({track.variant})[/dim]"
-            console.print(track_display)
-    else:
-        console.print("\n[yellow]No tracklist found[/yellow]")
+        is_manual = 'tracklist' in episode.manual_overrides
+        manual_indicator = " [yellow]⚠[/yellow]" if is_manual else ""
+        console.print(f"[cyan]Tracks:{manual_indicator}[/cyan] {len(episode.tracklist)}")
+
+    # Show manual overrides if any
+    if episode.manual_overrides:
+        console.print(f"\n[yellow]Manually overridden fields:[/yellow] {', '.join(sorted(episode.manual_overrides))}")
 
     console.print()
+
+
+# Keep info and show as hidden aliases for backward compatibility
+@app.command(name="info", hidden=True)
+@app.command(name="show", hidden=True)
+def info_alias(episode_id: str):
+    """Alias for get command (deprecated)"""
+    get(episode_id=episode_id, field=None)
+
+
+@app.command()
+def set(
+    episode_id: str = typer.Argument(..., help="Episode ID (e.g., E390, B05) or GUID"),
+    field: str = typer.Argument(..., help="Field to set"),
+    value: str = typer.Argument(..., help="New value"),
+):
+    """Set episode metadata field manually
+
+    Accepts episode IDs (E390, B05) or GUIDs.
+    Changing episode_type will trigger ID recalculation.
+    Changing episode_id requires valid format and checks for duplicates.
+
+    Examples:
+        tgl set E390 episode_type BONUS     # Change type to BONUS
+        tgl set B05 episode_type TGL        # Change type to TGL
+        tgl set E390 episode_id E395        # Change episode number
+        tgl set E390 title "New Title"      # Change title
+        tgl set 45962766 episode_type TGL   # Set by GUID
+    """
+    from .cache import MetadataCache
+    from .models import parse_episode_id
+
+    cache = MetadataCache()
+    episodes = cache.get_all_episodes()
+
+    # Find the episode by ID or GUID
+    episode, episode_idx = find_episode_by_id_or_guid(episodes, episode_id)
+
+    if not episode:
+        console.print(f"[red]Episode {episode_id} not found[/red]")
+        raise typer.Exit(1)
+
+    # Validate field exists
+    if field not in episode.model_fields:
+        console.print(f"[red]Field '{field}' does not exist[/red]")
+        console.print(f"[dim]Available fields: {', '.join(episode.model_fields.keys())}[/dim]")
+        raise typer.Exit(1)
+
+    # Restricted fields that can't be set manually
+    restricted_fields = {'id', 'manual_overrides'}
+    if field in restricted_fields:
+        console.print(f"[red]Field '{field}' cannot be set manually[/red]")
+        raise typer.Exit(1)
+
+    old_value = getattr(episode, field)
+
+    # Special handling for episode_type changes
+    if field == 'episode_type':
+        if value.upper() not in ['TGL', 'BONUS']:
+            console.print(f"[red]episode_type must be 'TGL' or 'BONUS'[/red]")
+            raise typer.Exit(1)
+
+        value = value.upper()
+
+        if value == old_value:
+            console.print(f"[yellow]episode_type is already {value}[/yellow]")
+            return
+
+        console.print(f"\n[yellow]Changing episode_type from {old_value} to {value}[/yellow]")
+        console.print("[dim]This will trigger ID recalculation...[/dim]\n")
+
+        # Change the type
+        episode.episode_type = value
+        episode.manual_overrides.add('episode_type')
+
+        # Recalculate IDs for all episodes
+        _recalculate_episode_ids(episodes)
+
+        # Save updated cache
+        cache._save_cache(episodes)
+
+        # Find the episode again (it may have a new ID)
+        new_ep = None
+        for ep in episodes:
+            if ep.guid == episode.guid:
+                new_ep = ep
+                break
+
+        if new_ep:
+            console.print(f"[green]✓[/green] Episode type changed to {value}")
+            console.print(f"[green]✓[/green] New episode ID: {new_ep.episode_id}")
+        else:
+            console.print(f"[red]Failed to find episode after recalculation[/red]")
+            raise typer.Exit(1)
+
+        return
+
+    # Special handling for episode_id changes
+    if field == 'episode_id':
+        new_id = value.upper()
+
+        # Validate format
+        try:
+            numeric_id = parse_episode_id(new_id)
+        except ValueError as e:
+            console.print(f"[red]Invalid episode ID format: {e}[/red]")
+            raise typer.Exit(1)
+
+        # Check for duplicates
+        for ep in episodes:
+            if ep.episode_id == new_id and ep.guid != episode.guid:
+                console.print(f"[red]Episode ID {new_id} already exists[/red]")
+                raise typer.Exit(1)
+
+        console.print(f"\n[yellow]Changing episode_id from {episode.episode_id} to {new_id}[/yellow]\n")
+
+        # Update episode_type based on new ID
+        if new_id.startswith('E'):
+            episode.episode_type = 'TGL'
+            episode.id = numeric_id
+        elif new_id.startswith('B'):
+            episode.episode_type = 'BONUS'
+            episode.id = numeric_id
+
+        episode.episode_id = new_id
+        episode.manual_overrides.add('episode_id')
+        episode.manual_overrides.add('episode_type')  # Type is implicitly set too
+
+        # Update full_title
+        if episode.episode_type == 'TGL':
+            episode.full_title = f"TGL {new_id}: {episode.title}"
+        else:
+            episode.full_title = f"BONUS {new_id}: {episode.title}"
+
+        # Save
+        episodes[episode_idx] = episode
+        cache._save_cache(episodes)
+
+        console.print(f"[green]✓[/green] Episode ID changed to {new_id}")
+        console.print(f"[green]✓[/green] Episode type set to {episode.episode_type}")
+        return
+
+    # Handle other fields
+    # Convert value to appropriate type
+    field_type = episode.model_fields[field].annotation
+
+    try:
+        if field_type == int or 'int' in str(field_type):
+            value = int(value)
+        elif field_type == bool or 'bool' in str(field_type):
+            value = value.lower() in ('true', '1', 'yes', 'y')
+        # else keep as string
+    except (ValueError, TypeError) as e:
+        console.print(f"[red]Invalid value type: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Set the value
+    setattr(episode, field, value)
+    episode.manual_overrides.add(field)
+
+    # Save
+    episodes[episode_idx] = episode
+    cache._save_cache(episodes)
+
+    console.print(f"\n[green]✓[/green] {field} changed from [dim]{old_value}[/dim] to [bold]{value}[/bold]")
+    console.print(f"[dim]This field is now marked as manually overridden[/dim]\n")
 
 
 @app.command()
@@ -1581,6 +1822,340 @@ def cover(text: Optional[str] = typer.Argument(None)):
     from .cover import display_cover_inline
 
     display_cover_inline(text)
+
+
+# ══════════════════════════════════════════════════════════════
+# Metadata Management Commands
+# ══════════════════════════════════════════════════════════════
+
+metadata_app = typer.Typer(help="Manage episode metadata")
+app.add_typer(metadata_app, name="metadata")
+
+
+@metadata_app.command(name="get")
+def metadata_get(
+    episode_id: str = typer.Argument(..., help="Episode ID (e.g., E390, B05)"),
+    field: Optional[str] = typer.Argument(None, help="Specific field to get (optional)"),
+):
+    """Show episode metadata
+
+    Examples:
+        tgl metadata get E390           # Show all metadata
+        tgl metadata get E390 title     # Show just the title
+        tgl metadata get B05 episode_type  # Show episode type
+    """
+    from .cache import MetadataCache
+    from .models import parse_episode_id
+    import json
+
+    cache = MetadataCache()
+    episodes = cache.get_all_episodes()
+
+    # Find the episode
+    episode = None
+    for ep in episodes:
+        if ep.episode_id == episode_id.upper():
+            episode = ep
+            break
+
+    if not episode:
+        console.print(f"[red]Episode {episode_id} not found[/red]")
+        raise typer.Exit(1)
+
+    # If field specified, show just that field
+    if field:
+        if not hasattr(episode, field):
+            console.print(f"[red]Field '{field}' does not exist[/red]")
+            console.print(f"[dim]Available fields: {', '.join(episode.model_fields.keys())}[/dim]")
+            raise typer.Exit(1)
+
+        value = getattr(episode, field)
+        is_manual = field in episode.manual_overrides
+
+        console.print(f"\n[bold]{episode.episode_id}[/bold] - [cyan]{field}[/cyan]:")
+        # Handle different value types
+        if value is None:
+            console.print(f"  [dim]None[/dim]")
+        elif isinstance(value, str):
+            console.print(f"  {value}")
+        elif isinstance(value, (int, float, bool)):
+            console.print(f"  {value}")
+        else:
+            # For lists, dicts, sets, and other complex types
+            console.print(json.dumps(value, indent=2, default=str))
+
+        if is_manual:
+            console.print(f"  [yellow]⚠ Manually overridden[/yellow]")
+        console.print()
+        return
+
+    # Show all metadata
+    console.print(f"\n[bold cyan]═══ Episode Metadata: {episode.episode_id} ═══[/bold cyan]\n")
+
+    # Format fields nicely
+    fields_to_show = [
+        ('episode_id', 'Episode ID'),
+        ('id', 'Internal ID'),
+        ('title', 'Title'),
+        ('episode_type', 'Type'),
+        ('published', 'Published'),
+        ('year', 'Year'),
+        ('duration', 'Duration'),
+        ('link', 'Patreon Link'),
+        ('guid', 'RSS GUID'),
+        ('audio_url', 'Audio URL'),
+        ('audio_size', 'Audio Size (bytes)'),
+    ]
+
+    for field_name, label in fields_to_show:
+        value = getattr(episode, field_name)
+        is_manual = field_name in episode.manual_overrides
+        manual_indicator = " [yellow]⚠[/yellow]" if is_manual else ""
+
+        if value is not None:
+            if field_name == 'link':
+                console.print(f"[cyan]{label}:{manual_indicator}[/cyan] [link={value}]{value}[/link]")
+            elif field_name == 'audio_url' and value:
+                short_url = value[:60] + "..." if len(value) > 60 else value
+                console.print(f"[cyan]{label}:{manual_indicator}[/cyan] {short_url}")
+            else:
+                console.print(f"[cyan]{label}:{manual_indicator}[/cyan] {value}")
+
+    # Show tracklist count
+    if episode.tracklist:
+        is_manual = 'tracklist' in episode.manual_overrides
+        manual_indicator = " [yellow]⚠[/yellow]" if is_manual else ""
+        console.print(f"[cyan]Tracks:{manual_indicator}[/cyan] {len(episode.tracklist)}")
+
+    # Show manual overrides if any
+    if episode.manual_overrides:
+        console.print(f"\n[yellow]Manually overridden fields:[/yellow] {', '.join(sorted(episode.manual_overrides))}")
+
+    console.print()
+
+
+@metadata_app.command(name="set")
+def metadata_set(
+    episode_id: str = typer.Argument(..., help="Episode ID (e.g., E390, B05)"),
+    field: str = typer.Argument(..., help="Field to set"),
+    value: str = typer.Argument(..., help="New value"),
+):
+    """Set episode metadata field manually
+
+    Changing episode_type will trigger ID recalculation.
+    Changing episode_id requires valid format and checks for duplicates.
+
+    Examples:
+        tgl metadata set E390 episode_type BONUS     # Change type to BONUS
+        tgl metadata set B05 episode_type TGL        # Change type to TGL
+        tgl metadata set E390 episode_id E395        # Change episode number
+        tgl metadata set E390 title "New Title"      # Change title
+    """
+    from .cache import MetadataCache
+    from .models import parse_episode_id
+
+    cache = MetadataCache()
+    episodes = cache.get_all_episodes()
+
+    # Find the episode
+    episode = None
+    episode_idx = None
+    for idx, ep in enumerate(episodes):
+        if ep.episode_id == episode_id.upper():
+            episode = ep
+            episode_idx = idx
+            break
+
+    if not episode:
+        console.print(f"[red]Episode {episode_id} not found[/red]")
+        raise typer.Exit(1)
+
+    # Validate field exists
+    if field not in episode.model_fields:
+        console.print(f"[red]Field '{field}' does not exist[/red]")
+        console.print(f"[dim]Available fields: {', '.join(episode.model_fields.keys())}[/dim]")
+        raise typer.Exit(1)
+
+    # Restricted fields that can't be set manually
+    restricted_fields = {'id', 'manual_overrides'}
+    if field in restricted_fields:
+        console.print(f"[red]Field '{field}' cannot be set manually[/red]")
+        raise typer.Exit(1)
+
+    old_value = getattr(episode, field)
+
+    # Special handling for episode_type changes
+    if field == 'episode_type':
+        if value.upper() not in ['TGL', 'BONUS']:
+            console.print(f"[red]episode_type must be 'TGL' or 'BONUS'[/red]")
+            raise typer.Exit(1)
+
+        value = value.upper()
+
+        if value == old_value:
+            console.print(f"[yellow]episode_type is already {value}[/yellow]")
+            return
+
+        console.print(f"\n[yellow]Changing episode_type from {old_value} to {value}[/yellow]")
+        console.print("[dim]This will trigger ID recalculation...[/dim]\n")
+
+        # Change the type
+        episode.episode_type = value
+        episode.manual_overrides.add('episode_type')
+
+        # Recalculate IDs for all episodes
+        _recalculate_episode_ids(episodes)
+
+        # Save updated cache
+        cache._save_cache(episodes)
+
+        # Find the episode again (it may have a new ID)
+        new_ep = None
+        for ep in episodes:
+            if ep.guid == episode.guid:
+                new_ep = ep
+                break
+
+        if new_ep:
+            console.print(f"[green]✓[/green] Episode type changed to {value}")
+            console.print(f"[green]✓[/green] New episode ID: {new_ep.episode_id}")
+        else:
+            console.print(f"[red]Failed to find episode after recalculation[/red]")
+            raise typer.Exit(1)
+
+        return
+
+    # Special handling for episode_id changes
+    if field == 'episode_id':
+        new_id = value.upper()
+
+        # Validate format
+        try:
+            numeric_id = parse_episode_id(new_id)
+        except ValueError as e:
+            console.print(f"[red]Invalid episode ID format: {e}[/red]")
+            raise typer.Exit(1)
+
+        # Check for duplicates
+        for ep in episodes:
+            if ep.episode_id == new_id and ep.guid != episode.guid:
+                console.print(f"[red]Episode ID {new_id} already exists[/red]")
+                raise typer.Exit(1)
+
+        console.print(f"\n[yellow]Changing episode_id from {episode.episode_id} to {new_id}[/yellow]\n")
+
+        # Update episode_type based on new ID
+        if new_id.startswith('E'):
+            episode.episode_type = 'TGL'
+            episode.id = numeric_id
+        elif new_id.startswith('B'):
+            episode.episode_type = 'BONUS'
+            episode.id = numeric_id
+
+        episode.episode_id = new_id
+        episode.manual_overrides.add('episode_id')
+        episode.manual_overrides.add('episode_type')  # Type is implicitly set too
+
+        # Update full_title
+        if episode.episode_type == 'TGL':
+            episode.full_title = f"TGL {new_id}: {episode.title}"
+        else:
+            episode.full_title = f"BONUS {new_id}: {episode.title}"
+
+        # Save
+        episodes[episode_idx] = episode
+        cache._save_cache(episodes)
+
+        console.print(f"[green]✓[/green] Episode ID changed to {new_id}")
+        console.print(f"[green]✓[/green] Episode type set to {episode.episode_type}")
+        return
+
+    # Handle other fields
+    # Convert value to appropriate type
+    field_type = episode.model_fields[field].annotation
+
+    try:
+        if field_type == int or 'int' in str(field_type):
+            value = int(value)
+        elif field_type == bool or 'bool' in str(field_type):
+            value = value.lower() in ('true', '1', 'yes', 'y')
+        # else keep as string
+    except (ValueError, TypeError) as e:
+        console.print(f"[red]Invalid value type: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Set the value
+    setattr(episode, field, value)
+    episode.manual_overrides.add(field)
+
+    # Save
+    episodes[episode_idx] = episode
+    cache._save_cache(episodes)
+
+    console.print(f"\n[green]✓[/green] {field} changed from [dim]{old_value}[/dim] to [bold]{value}[/bold]")
+    console.print(f"[dim]This field is now marked as manually overridden[/dim]\n")
+
+
+def _recalculate_episode_ids(episodes: list):
+    """Recalculate episode IDs after type changes
+
+    Uses inference to assign proper TGL episode numbers based on chronological position.
+    BONUS episodes are renumbered sequentially.
+    """
+    from .fetcher import PatreonPodcastFetcher
+
+    # Create a temporary fetcher for inference
+    fetcher = PatreonPodcastFetcher('')
+
+    # Separate TGL and BONUS
+    tgl_episodes = [ep for ep in episodes if ep.episode_type == 'TGL']
+    bonus_episodes = [ep for ep in episodes if ep.episode_type == 'BONUS']
+
+    # Sort TGL by published date for inference
+    tgl_episodes.sort(key=lambda ep: ep.published)
+
+    # Build temp episode dict for inference (mimics fetcher's structure)
+    temp_tgl = []
+    for ep in tgl_episodes:
+        # Try to parse episode number from title
+        ep_num = fetcher.parse_episode_id(ep.full_title)
+        temp_tgl.append({
+            'title': ep.full_title,
+            'guid': ep.guid,
+            'link': ep.link,
+            'parsed_num': ep_num
+        })
+
+    # Run inference on TGL episodes
+    inferred_numbers = fetcher._infer_episode_numbers(temp_tgl)
+
+    # Assign TGL episode numbers
+    for idx, ep in enumerate(tgl_episodes):
+        # Skip if manually set
+        if 'episode_id' in ep.manual_overrides:
+            continue
+
+        # Get inferred number (or use parsed number from title)
+        inferred_num = inferred_numbers.get(ep.link)
+        if inferred_num is None:
+            # Try to parse from title
+            inferred_num = fetcher.parse_episode_id(ep.full_title)
+
+        if inferred_num:
+            ep.id = inferred_num
+            ep.episode_id = f"E{inferred_num}"
+            # Don't override full_title - keep original RSS title
+
+    # Sort BONUS by published date
+    bonus_episodes.sort(key=lambda ep: ep.published)
+
+    # Renumber BONUS episodes
+    for idx, ep in enumerate(bonus_episodes, start=1):
+        # Only update if not manually set
+        if 'episode_id' not in ep.manual_overrides:
+            ep.id = 10000 + idx
+            ep.episode_id = f"B{idx:02d}"
+            # Don't override full_title - keep original RSS title
 
 
 def main():

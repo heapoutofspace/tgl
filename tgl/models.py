@@ -4,7 +4,7 @@ This module contains only data models. Configuration management
 is handled in the config module.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Set
 from pydantic import BaseModel, Field
 
 
@@ -27,10 +27,12 @@ class Episode(BaseModel):
     published: str
     year: Optional[int] = None
     link: str
+    guid: Optional[str] = None  # RSS guid for episode identity tracking
     audio_url: Optional[str] = None
     audio_size: Optional[int] = None  # Audio file size in bytes (from RSS feed)
     episode_type: str = 'TGL'  # 'TGL' or 'BONUS'
     duration: Optional[str] = None  # Episode duration (e.g., "1:23:45" or "45:30")
+    manual_overrides: Set[str] = Field(default_factory=set)  # Track manually set fields
 
     def model_post_init(self, __context):
         """Set default episode_id if not provided (for backward compatibility)"""

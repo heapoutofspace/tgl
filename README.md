@@ -159,17 +159,33 @@ The list command displays:
 - Track count, date, and duration
 - Clickable episode IDs that open the Patreon post
 
-### Episode Details
+### Episode Metadata
 
 ```bash
-# Show episode details (clickable IDs!)
-tgl info E390
-tgl show B05  # Bonus episode
+# Get all episode metadata
+tgl get E390
+tgl get B05  # Bonus episode
+
+# Get specific field
+tgl get E390 title
+tgl get E390 episode_type
+
+# Lookup by GUID (RSS identifier)
+tgl get 45962766
+
+# Set episode metadata
+tgl set E390 title "New Title"
+tgl set E390 episode_type BONUS  # Changes type and recalculates ID
 
 # Supported ID formats:
-# - Plain: "390"
 # - E prefix: "E390"
 # - B prefix: "B05"
+# - Plain: "390" (treated as TGL episode)
+# - GUID: "45962766" (RSS identifier)
+
+# Backward compatibility aliases
+tgl info E390  # Alias for 'tgl get E390'
+tgl show E390  # Alias for 'tgl get E390'
 ```
 
 ### Search

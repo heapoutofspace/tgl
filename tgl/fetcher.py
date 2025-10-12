@@ -103,6 +103,7 @@ class PatreonPodcastFetcher:
         standard_patterns = [
             r'\bE\s*(\d+)\b',                          # TGL E390, TGL E 390
             r'TGL\s*-?\s*(\d+)\b',                     # TGL 382, TGL - 382, TGL-382
+            r'(?:The\s+)?Guestlist\s*-\s*(\d+)',       # The Guestlist - 170, Guestlist - 170
             r'(?:The\s+)?Guestlist\s+(\d+)',           # The Guestlist 47, The Guestlist 101
             r'G-?list\s+(\d+)',                        # G-list 95, Glist 82
         ]
@@ -425,35 +426,20 @@ class PatreonPodcastFetcher:
         """Classify episode as TGL or BONUS based on title
 
         Priority order:
-        1. Check for re-upload patterns (highest priority - these are BONUS even with TGL prefix)
-        2. Check for clear TGL indicators (with episode numbers)
-        3. Check for BONUS-only patterns
-        4. Check for broader TGL patterns
-        5. Default to BONUS
+        1. Check for clear TGL indicators with episode numbers (HIGHEST PRIORITY)
+        2. Check for BONUS-only patterns (never TGL)
+        3. Check for broader TGL patterns (without requiring numbers)
+        4. Default to BONUS
         """
         title_lower = title.lower()
 
-        # First priority: Re-upload patterns - these are BONUS even if they have TGL prefix
-        # These are re-uploads or special compilations using old episode numbers
-        # NOTE: "best of" removed - annual best-of episodes are legitimate TGL episodes
-        reupload_patterns = [
-            r'\bback to school\b',  # "Back to School Classics" (re-upload)
-            r'\bcareer\b',  # "My New Rap Career" (personal content re-upload)
-            r'\bstays in\b',  # Travel content
-            r'stormagg?ed[eo]+n',  # "STORMAGGEDEON" or "STORMAGGEDDON" (special themed re-upload)
-            r'\bpure fire edition\b',  # "PURE FIRE EDITION" (compilation re-upload)
-            r'\bmark runs\b',  # Personal narrative content
-            r'\brewind\b',  # "Rewind" episodes
-        ]
-
-        for pattern in reupload_patterns:
-            if re.search(pattern, title_lower):
-                return 'BONUS'
-
-        # Second priority: Clear TGL episode patterns with numbers
-        # These take precedence over general content keywords
+        # First priority: Clear TGL episode patterns with numbers
+        # These take precedence over ANY other content patterns
         clear_tgl_patterns = [
             r'\btgl\s+\d+',        # "TGL 227", "TGL 126"
+            r'\btgl\s*-\s*\d+',    # "TGL - 169", "TGL-169" (dash-separated format)
+            r'\btgl\d+:',          # "TGL221:" (no space before colon)
+            r'\btgl:\s*e\s*\d+',   # "TGL: E242" (colon before E number)
             r'\btgl\s+e\d+',       # "TGL E390" etc.
             r'\btgl\s+episode\s+\d+',  # "TGL Episode 208"
             r'\bgue[^-\s]*list\s*[:-]?\s*episode\s+\d+',  # "Guestlist: Episode 140", "Gueslist - Episode 100" (typo-tolerant)
@@ -468,7 +454,7 @@ class PatreonPodcastFetcher:
             if re.search(pattern, title_lower):
                 return 'TGL'
 
-        # Third priority: BONUS-only patterns (not TGL episodes)
+        # Second priority: BONUS-only patterns (not TGL episodes)
         # These are content types that are never TGL episodes
         bonus_only_patterns = [
             r'\bfear of tigers\b',
@@ -612,6 +598,9 @@ class PatreonPodcastFetcher:
             for entry in entries_to_process:
                 title = entry.get('title', '')
 
+                # Store original title from RSS
+                original_title = title
+
                 # Classify episode type
                 episode_type = self.classify_episode_type(title)
 
@@ -666,15 +655,21 @@ class PatreonPodcastFetcher:
                 description_text = self._extract_description_text(raw_description)
                 tracklist = self._parse_structured_tracklist(raw_description)
 
+                # Get guid (or id) for episode identity tracking
+                # RSS feeds use guid or id for unique identity
+                guid = entry.get('guid') or entry.get('id') or entry.get('link', '')
+
                 # Store episode data temporarily
                 temp_episodes.append({
                     'title': title,
+                    'original_title': original_title,
                     'clean_title': clean_title,
                     'episode_type': episode_type,
                     'published': published,
                     'published_parsed': published_parsed,
                     'year': year,
                     'link': entry.get('link', ''),
+                    'guid': guid,
                     'audio_url': audio_url,
                     'audio_size': audio_size,
                     'duration': duration,
@@ -683,8 +678,40 @@ class PatreonPodcastFetcher:
                     'tracklist': tracklist
                 })
 
-            # Second pass: assign IDs to BONUS episodes sequentially
-            # Sort BONUS episodes by published date (oldest first)
+            # Second pass: Track which TGL numbers are used as we assign them
+            # This prevents duplicate episode IDs
+            used_tgl_numbers = set()
+
+            # Third pass: Run inference to fill gaps in TGL sequence
+            # Sort TGL episodes by published date for inference
+            tgl_episodes = [ep for ep in temp_episodes if ep['episode_type'] == 'TGL']
+            tgl_episodes.sort(key=lambda ep: ep['published_parsed'] if ep['published_parsed'] else time.struct_time((1970, 1, 1, 0, 0, 0, 0, 1, 0)))
+            inferred_numbers = self._infer_episode_numbers(tgl_episodes)
+
+            # Fourth pass: Try to fill gaps with BONUS episodes
+            # Get all explicit TGL numbers
+            explicit_tgl_numbers = set()
+            for ep in tgl_episodes:
+                ep_num = self.parse_episode_id(ep['title'])
+                if ep_num:
+                    explicit_tgl_numbers.add(ep_num)
+
+            # Run inference on ALL episodes to find chronological positions
+            all_sorted = sorted(temp_episodes, key=lambda ep: ep['published_parsed'] if ep['published_parsed'] else time.struct_time((1970, 1, 1, 0, 0, 0, 0, 1, 0)))
+            all_inferred = self._infer_episode_numbers(all_sorted)
+
+            # Reclassify BONUS episodes that fill TGL gaps
+            for ep_data in temp_episodes:
+                if ep_data['episode_type'] == 'BONUS':
+                    inferred_num = all_inferred.get(ep_data['link'])
+                    # Only reclassify if:
+                    # 1. Has an inferred number
+                    # 2. That number is not explicitly used by a TGL episode
+                    if inferred_num and inferred_num not in explicit_tgl_numbers:
+                        ep_data['episode_type'] = 'TGL'
+                        inferred_numbers[ep_data['link']] = inferred_num
+
+            # Fifth pass: Assign B numbers to BONUS episodes
             bonus_episodes = [ep for ep in temp_episodes if ep['episode_type'] == 'BONUS']
             bonus_episodes.sort(key=lambda ep: ep['published_parsed'] if ep['published_parsed'] else time.struct_time((1970, 1, 1, 0, 0, 0, 0, 1, 0)))
 
@@ -693,46 +720,77 @@ class PatreonPodcastFetcher:
             for idx, ep in enumerate(bonus_episodes, start=1):
                 bonus_id_map[ep['link']] = idx
 
-            # Infer episode numbers for TGL episodes without explicit numbers
-            tgl_episodes = [ep for ep in temp_episodes if ep['episode_type'] == 'TGL']
-            tgl_episodes.sort(key=lambda ep: ep['published_parsed'] if ep['published_parsed'] else time.struct_time((1970, 1, 1, 0, 0, 0, 0, 1, 0)))
-            inferred_numbers = self._infer_episode_numbers(tgl_episodes)
-
-            # Third pass: create Episode objects with proper IDs
+            # Sixth pass: create Episode objects with proper IDs and prevent duplicates
             episodes = []
             for ep_data in temp_episodes:
                 episode_type = ep_data['episode_type']
 
-                if episode_type == 'TGL':
-                    numeric_id = self.parse_episode_id(ep_data['title'])
-                    if numeric_id is None:
-                        # Try to use inferred number
-                        numeric_id = inferred_numbers.get(ep_data['link'], 0)
+                # Hardcoded reclassifications (special cases)
+                if 'From The Crates - Euphoric Piano House 1994-1995' in ep_data['title']:
+                    # Force this episode to be E50 (TGL)
+                    episode_type = 'TGL'
+                elif 'FOT Cast - What Should Fear of Tigers remix next?' in ep_data['title']:
+                    # Current E50 should be demoted to BONUS
+                    episode_type = 'BONUS'
 
-                    # Special handling for duplicate episode IDs (historical errors)
-                    # These are hardcoded exceptions to fix known duplicates in the podcast's history
-                    if 'The Best of 2019 - Listeners Choice' in ep_data['title'] and numeric_id == 119:
+                if episode_type == 'TGL':
+                    # Get episode number from title
+                    numeric_id = self.parse_episode_id(ep_data['title'])
+
+                    # Special handling for hardcoded episode numbers
+                    if 'From The Crates - Euphoric Piano House 1994-1995' in ep_data['title']:
+                        # Force this to be E50
+                        numeric_id = 50
+                    elif 'The Best of 2019 - Listeners Choice' in ep_data['title'] and numeric_id == 119:
                         # E119 "The Best of 2019 - Listeners Choice" -> E118
                         numeric_id = 118
-                        episode_id_str = "E118"
                     elif 'Old School Delight' in ep_data['title'] and numeric_id == 126:
                         # E126 "Old School Delight" -> E226 (correct episode number)
                         numeric_id = 226
-                        episode_id_str = "E226"
+
+                    # If no explicit number, try inference
+                    if numeric_id is None:
+                        numeric_id = inferred_numbers.get(ep_data['link'], 0)
+
+                    # Check if this is a hardcoded episode (allowed to claim its number)
+                    is_hardcoded = (
+                        'From The Crates - Euphoric Piano House 1994-1995' in ep_data['title'] or
+                        'The Best of 2019 - Listeners Choice' in ep_data['title'] or
+                        'Old School Delight' in ep_data['title']
+                    )
+
+                    # Check if this number is already used (unless this is a hardcoded episode)
+                    if numeric_id > 0 and numeric_id in used_tgl_numbers and not is_hardcoded:
+                        # Duplicate! Fall back to BONUS
+                        episode_type = 'BONUS'
+                        b_number = len(bonus_id_map) + 1
+                        bonus_id_map[ep_data['link']] = b_number
+                        numeric_id = 10000 + b_number
+                        episode_id_str = f"B{b_number:02d}"
+                    elif numeric_id > 0:
+                        # Valid unique TGL number
+                        used_tgl_numbers.add(numeric_id)
+                        episode_id_str = f"E{numeric_id}"
                     else:
-                        episode_id_str = f"E{numeric_id}" if numeric_id > 0 else "E???"
+                        # No number at all, fall back to BONUS
+                        episode_type = 'BONUS'
+                        b_number = len(bonus_id_map) + 1
+                        bonus_id_map[ep_data['link']] = b_number
+                        numeric_id = 10000 + b_number
+                        episode_id_str = f"B{b_number:02d}"
                 else:
                     # BONUS episodes use sequential numbering with offset to avoid conflicts
                     # Use 10000 + sequence number as the internal numeric ID
-                    b_number = bonus_id_map[ep_data['link']]
+                    b_number = bonus_id_map.get(ep_data['link'])
+                    if b_number is None:
+                        # This shouldn't happen, but fallback just in case
+                        b_number = len(bonus_id_map) + 1
+                        bonus_id_map[ep_data['link']] = b_number
                     numeric_id = 10000 + b_number
                     episode_id_str = f"B{b_number:02d}"
 
-                # Build normalized full_title with formatted ID
-                if episode_type == 'TGL':
-                    full_title = f"TGL {episode_id_str}: {ep_data['clean_title']}"
-                else:
-                    full_title = f"BONUS {episode_id_str}: {ep_data['clean_title']}"
+                # Use original RSS title as full_title
+                full_title = ep_data['original_title']
 
                 episode = Episode(
                     id=numeric_id,
@@ -745,6 +803,7 @@ class PatreonPodcastFetcher:
                     published=ep_data['published'],
                     year=ep_data['year'],
                     link=ep_data['link'],
+                    guid=ep_data['guid'],
                     audio_url=ep_data['audio_url'],
                     audio_size=ep_data['audio_size'],
                     episode_type=episode_type,

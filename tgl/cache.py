@@ -26,7 +26,7 @@ class MetadataCache:
         self.cache_dir = cache_dir if cache_dir else paths.data_dir
         self.metadata_file = paths.episodes_cache
         self.cache_dir.mkdir(parents=True, exist_ok=True)
-        self.episodes: Dict[int, Episode] = {}
+        self.episodes: Dict[str, Episode] = {}  # Now keyed by guid
         self.last_updated: Optional[datetime] = None
         self._load()
 
@@ -44,11 +44,15 @@ class MetadataCache:
                             self.last_updated = datetime.fromisoformat(timestamp_str)
 
                     # Load episodes (skip metadata keys)
-                    self.episodes = {
-                        int(ep_id): Episode(**ep_data)
-                        for ep_id, ep_data in data.items()
-                        if not ep_id.startswith('_')
-                    }
+                    # Try to use guid as key, fall back to id for backwards compatibility
+                    self.episodes = {}
+                    for key, ep_data in data.items():
+                        if key.startswith('_'):
+                            continue
+                        ep = Episode(**ep_data)
+                        # Use guid as key (preferred), or fall back to numeric id
+                        cache_key = ep.guid if ep.guid else str(ep.id)
+                        self.episodes[cache_key] = ep
 
                 age_str = ""
                 if self.last_updated:
@@ -75,8 +79,14 @@ class MetadataCache:
                     'episode_count': len(self.episodes)
                 }
             }
-            # Add episodes
-            data.update({ep_id: ep.model_dump() for ep_id, ep in self.episodes.items()})
+            # Add episodes (convert sets to lists for JSON serialization)
+            # Use guid as key
+            for guid, ep in self.episodes.items():
+                ep_data = ep.model_dump()
+                # Convert manual_overrides set to list
+                if 'manual_overrides' in ep_data and isinstance(ep_data['manual_overrides'], set):
+                    ep_data['manual_overrides'] = list(ep_data['manual_overrides'])
+                data[guid] = ep_data
 
             with open(self.metadata_file, 'w') as f:
                 json.dump(data, f, indent=2)
@@ -86,7 +96,9 @@ class MetadataCache:
 
     def add_episode(self, episode: Episode):
         """Add or update an episode in the cache"""
-        self.episodes[episode.id] = episode
+        # Use guid as key (preferred), or fall back to numeric id
+        cache_key = episode.guid if episode.guid else str(episode.id)
+        self.episodes[cache_key] = episode
 
     def get_episode(self, episode_id: int) -> Optional[Episode]:
         """Get an episode by ID"""
@@ -165,3 +177,12 @@ class MetadataCache:
             console.print(f"[green]✓[/green] Search index built\n")
         else:
             console.print("[yellow]Warning: No episodes fetched[/yellow]\n")
+
+    def _save_cache(self, episodes: List[Episode]):
+        """Save episodes list directly to cache (for metadata commands)"""
+        # Use guid as key
+        self.episodes = {}
+        for ep in episodes:
+            cache_key = ep.guid if ep.guid else str(ep.id)
+            self.episodes[cache_key] = ep
+        self.save()

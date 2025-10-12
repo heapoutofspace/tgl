@@ -115,6 +115,40 @@ class PatreonPodcastFetcher:
 
         return None
 
+    def _clean_episode_title(self, title: str) -> str:
+        """Clean episode title by removing episode numbers and podcast name
+
+        Args:
+            title: Episode title to clean
+
+        Returns:
+            Cleaned title (may be empty string if nothing remains)
+        """
+        cleaned = title
+
+        # Remove episode number prefixes at the start
+        # Pattern: E### - title, E### title, Episode ### - title, etc.
+        cleaned = re.sub(r'^E\s*\d+\s*[-–—]?\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'^Episode\s+\d+\s*[-–—]?\s*', '', cleaned, flags=re.IGNORECASE)
+
+        # Remove "TGL" with optional episode number
+        # Pattern: TGL E204 - title, TGL - title, TGL title
+        cleaned = re.sub(r'^TGL\s+E?\s*\d*\s*[-–—]?\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'^TGL\s*[-–—]?\s*', '', cleaned, flags=re.IGNORECASE)
+
+        # Remove "The Guestlist" with optional episode number
+        # Pattern: The Guestlist - Episode 24, The Guestlist Episode 1, The Guestlist - title
+        cleaned = re.sub(r'^(?:The\s+)?Gue[^-\s]*list\s*[-–—]?\s*Episode\s+\d+\s*[-–—]?\s*', '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r'^(?:The\s+)?Gue[^-\s]*list\s*[-–—]?\s*', '', cleaned, flags=re.IGNORECASE)
+
+        # Remove "G-list" variants
+        cleaned = re.sub(r'^G-?list\s*[-–—]?\s*', '', cleaned, flags=re.IGNORECASE)
+
+        # Strip any remaining leading/trailing whitespace and dashes
+        cleaned = cleaned.strip(' \t\n\r-–—')
+
+        return cleaned
+
     def _extract_description_text(self, html_description: str) -> str:
         """Extract clean text before the tracklist begins"""
         clean_text = self.parser._strip_html(html_description)
@@ -608,6 +642,9 @@ class PatreonPodcastFetcher:
                 clean_title = title
                 if ':' in title:
                     clean_title = title.split(':', 1)[1].strip()
+
+                # Further clean the title to remove episode numbers and podcast name
+                clean_title = self._clean_episode_title(clean_title)
 
                 # Parse published date
                 published_parsed = entry.get('published_parsed')

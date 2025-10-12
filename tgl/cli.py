@@ -1,5 +1,28 @@
 """TGL CLI entry point and commands"""
 
+# Configure multiprocessing FIRST before any other imports
+# This is CRITICAL for faster-whisper to work properly with Textual TUI
+#
+# Background:
+# - faster-whisper uses PyTorch which uses multiprocessing internally
+# - Textual TUI creates special file descriptors for terminal I/O
+# - Default 'spawn' method tries to pass these file descriptors to child processes
+# - This causes "bad value(s) in fds_to_keep" error
+#
+# Solution:
+# - Use 'fork' method instead of 'spawn'
+# - Fork copies parent process memory without reinitializing everything
+# - File descriptors are properly handled in forked processes
+#
+# MUST be set before importing torch, faster_whisper, or tgl modules
+import multiprocessing as mp
+try:
+    if mp.get_start_method(allow_none=True) is None:
+        mp.set_start_method('fork', force=True)
+except RuntimeError:
+    # Already set (shouldn't happen, but handle gracefully)
+    pass
+
 import typer
 from typing import Optional, Annotated, List, Dict
 from pathlib import Path
@@ -67,6 +90,7 @@ def main(ctx: typer.Context):
         console.print("  [cyan]transcribe[/cyan]           Transcribe episodes using Whisper AI")
         console.print("  [cyan]spotify[/cyan]              Import tracklists to Spotify playlist")
         console.print("  [cyan]update[/cyan]               Update episode metadata from RSS feed")
+        console.print("  [cyan]doctor[/cyan]               Diagnose metadata and track mapping issues")
         console.print("  [cyan]config[/cyan]               Manage TGL configuration\n")
 
         console.print("[bold]Examples:[/bold]\n")
@@ -100,6 +124,64 @@ def main(ctx: typer.Context):
 # ═══════════════════════════════════════════════════════════════════════
 # Helper Functions
 # ═══════════════════════════════════════════════════════════════════════
+
+def parse_episode_range(range_str: str, all_episodes: list) -> list:
+    """Parse episode range like 'E100-E150' and return list of episode IDs
+
+    Args:
+        range_str: Range string like 'E100-E150' or 'E200-E250'
+        all_episodes: List of all episodes to find matches in
+
+    Returns:
+        List of episode ID strings in the range
+    """
+    if '-' not in range_str:
+        # Not a range, return as-is
+        return [range_str]
+
+    parts = range_str.split('-')
+    if len(parts) != 2:
+        # Invalid format, return as-is
+        return [range_str]
+
+    start_id, end_id = parts[0].strip().upper(), parts[1].strip().upper()
+
+    # Extract prefix and numbers
+    import re
+    start_match = re.match(r'([A-Z]+)(\d+)', start_id)
+    end_match = re.match(r'([A-Z]+)(\d+)', end_id)
+
+    if not start_match or not end_match:
+        # Invalid format, return as-is
+        return [range_str]
+
+    start_prefix, start_num = start_match.groups()
+    end_prefix, end_num = end_match.groups()
+
+    if start_prefix != end_prefix:
+        # Different prefixes, invalid
+        console.print(f"[yellow]Warning: Range '{range_str}' has different prefixes, skipping[/yellow]")
+        return []
+
+    start_num = int(start_num)
+    end_num = int(end_num)
+
+    if start_num > end_num:
+        # Invalid range
+        console.print(f"[yellow]Warning: Invalid range '{range_str}' (start > end), skipping[/yellow]")
+        return []
+
+    # Generate all IDs in range
+    episode_ids = []
+    for num in range(start_num, end_num + 1):
+        episode_id = f"{start_prefix}{num}"
+        # Check if episode exists
+        episode, _ = find_episode_by_id_or_guid(all_episodes, episode_id)
+        if episode:
+            episode_ids.append(episode_id)
+
+    return episode_ids
+
 
 def find_episode_by_id_or_guid(episodes: list, identifier: str):
     """Find an episode by episode_id or guid
@@ -279,8 +361,9 @@ def list(
         # Determine correct file extension from audio URL
         file_extension = '.mp3'  # default
         if episode.audio_url:
-            cached_path = _get_cached_audio_path(episode.audio_url)
-            file_extension = cached_path.suffix or '.mp3'
+            cached_path = _get_cached_audio_path(episode)
+            if cached_path:
+                file_extension = cached_path.suffix or '.mp3'
 
         filename = f"{episode.episode_id} - {episode.title}{file_extension}"
         filename = re.sub(r'[<>:"/\\|?*]', '', filename)
@@ -650,8 +733,8 @@ def search(
     console.print(f"\n[dim]Showing top {min(len(results), 20)} results[/dim]\n")
 
 
-def _get_cached_audio_path(audio_url: str) -> Path:
-    """Get the cached audio file path for a given URL
+def _get_audio_cache_path(audio_url: str) -> Path:
+    """Get the cached audio file path for a given URL (for download command cache)
 
     Uses SHA1 hash of the URL (without query parameters) as filename.
     """
@@ -777,7 +860,7 @@ def download(
                 dest_dir = paths.bonus_episodes_dir
 
             # Get cached file path to determine actual file extension
-            cached_path = _get_cached_audio_path(episode.audio_url)
+            cached_path = _get_audio_cache_path(episode.audio_url)
             file_extension = cached_path.suffix or '.mp3'
 
             # Build filename with correct extension
@@ -994,26 +1077,142 @@ def download(
     console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]")
 
 
+def _transcribe_no_ui(episodes: List, transcription_cache, cache, model_size: str = "large-v3"):
+    """Transcribe episodes without TUI (for debugging)"""
+    import httpx
+
+    console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
+    console.print(f"[bold cyan]Transcribing {len(episodes)} Episode(s) (No UI Mode)[/bold cyan]")
+    console.print(f"[bold cyan]{'═' * 60}[/bold cyan]\n")
+
+    transcription_count = 0
+    error_count = 0
+    errors = []
+
+    for idx, ep in enumerate(episodes, 1):
+        console.print(f"\n[cyan]━━━ [{idx}/{len(episodes)}] {ep.episode_id}: {ep.title} ━━━[/cyan]\n")
+
+        guid = ep.guid or str(ep.id)
+        audio_path = _get_cached_audio_path(ep)
+
+        # Download if needed
+        if not audio_path:
+            console.print(f"[yellow]Downloading episode...[/yellow]")
+            try:
+                dest_path = _get_episode_audio_path(ep, check_exists=False)
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+                if not ep.audio_url:
+                    raise RuntimeError("No audio URL available")
+
+                with httpx.stream("GET", ep.audio_url, follow_redirects=True, timeout=300.0) as response:
+                    response.raise_for_status()
+                    total_size = int(response.headers.get('content-length', 0))
+
+                    with open(dest_path, 'wb') as f:
+                        downloaded = 0
+                        for chunk in response.iter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            if total_size > 0:
+                                pct = (downloaded / total_size) * 100
+                                console.print(f"\r[cyan]Downloaded: {pct:.1f}% ({downloaded / 1024 / 1024:.1f}MB / {total_size / 1024 / 1024:.1f}MB)[/cyan]", end="")
+                    console.print()  # New line after progress
+
+                audio_path = dest_path
+                console.print(f"[green]✓ Downloaded[/green]")
+
+            except Exception as e:
+                console.print(f"\n[red]✗ Download failed: {e}[/red]")
+                errors.append((ep, f"Download failed: {e}"))
+                error_count += 1
+                continue
+
+        # Transcribe
+        console.print(f"[yellow]Transcribing (this may take a while)...[/yellow]")
+        try:
+            # Simple callback to show progress
+            import sys
+            last_pct = [0]
+            def on_progress(pct):
+                if int(pct) > last_pct[0]:
+                    last_pct[0] = int(pct)
+                    # Use plain print with \r for carriage return (Rich doesn't handle this well)
+                    print(f"\rTranscription progress: {pct:.1f}%", end="", flush=True)
+
+            transcription_text, segments = transcribe_audio(audio_path, model_size=model_size, progress_callback=on_progress)
+            print()  # New line after progress
+
+            # Save transcription with timestamps
+            transcription_cache.add_transcription(guid, transcription_text, segments)
+            transcription_cache.save()
+
+            console.print(f"[green]✓ Transcribed ({len(transcription_text)} characters, {len(segments)} segments)[/green]")
+            transcription_count += 1
+
+        except Exception as e:
+            console.print(f"\n[red]✗ Transcription failed: {e}[/red]")
+            import traceback
+            console.print(f"[dim]{traceback.format_exc()}[/dim]")
+            errors.append((ep, f"Transcription failed: {e}"))
+            error_count += 1
+
+    # Summary
+    console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
+    console.print(f"[bold cyan]Transcription Summary[/bold cyan]")
+    console.print(f"[bold cyan]{'═' * 60}[/bold cyan]\n")
+
+    console.print(f"[green]✓ Successfully transcribed {transcription_count} episode(s)[/green]")
+
+    if errors:
+        console.print(f"\n[red]✗ Failed {error_count} episode(s):[/red]")
+        for ep, error in errors:
+            console.print(f"  • [bold]{ep.episode_id}[/bold]: {ep.title[:50]}")
+            console.print(f"    [dim]{error}[/dim]")
+        console.print()
+
+    # Rebuild search index to include new transcriptions
+    if transcription_count > 0:
+        console.print("[cyan]Updating search index...[/cyan]")
+        search_index = SearchIndex()
+        search_index.build_index(cache.episodes)
+        console.print("[green]✓[/green] Search index updated\n")
+
+
 @app.command()
 def transcribe(
-    episode_ids: Optional[List[str]] = typer.Argument(None, help="Episode IDs to transcribe (e.g., E390 E391 B01)"),
+    episode_ids: Optional[List[str]] = typer.Argument(None, help="Episode IDs or ranges (e.g., E390, E100-E150)"),
     all_episodes: bool = typer.Option(False, "--all", help="Transcribe all episodes"),
-    force: bool = typer.Option(False, "--force", "-f", help="Re-transcribe even if transcription exists")
+    force: bool = typer.Option(False, "--force", "-f", help="Re-transcribe even if transcription exists"),
+    no_ui: bool = typer.Option(False, "--no-ui", help="Disable TUI, show progress bars instead (for debugging)"),
+    model: str = typer.Option("large-v3", "--model", "-m", help="Whisper model (turbo, large-v3, large-v2, medium, small, base, tiny)")
 ):
     """Transcribe episode audio files using Whisper AI
 
-    Downloads episodes if needed, then transcribes them using insanely-fast-whisper.
+    Downloads episodes if needed, then transcribes them using faster-whisper.
     Transcriptions are automatically integrated into the search index.
 
+    Shows a live TUI with:
+    - Overall progress statistics
+    - Episode list with status icons
+    - Live transcription text scrolling
+    - Download progress for each episode
+
     Examples:
-      tgl transcribe E390           # Transcribe single episode
-      tgl transcribe E390 E391 B01  # Transcribe multiple episodes
-      tgl transcribe --all          # Transcribe all episodes
-      tgl transcribe E390 --force   # Re-transcribe even if exists
+      tgl transcribe E390              # Transcribe single episode
+      tgl transcribe E390 E391 B01     # Transcribe multiple episodes
+      tgl transcribe E100-E150         # Transcribe episode range (inclusive)
+      tgl transcribe E100-E110 E200    # Mix ranges and individual episodes
+      tgl transcribe --all             # Transcribe all episodes
+      tgl transcribe E390 --force      # Re-transcribe even if exists
+      tgl transcribe E390 --no-ui      # Debug mode without TUI
+      tgl transcribe E390 -m turbo     # Use faster turbo model
+      tgl transcribe E390 -m medium    # Use smaller, faster medium model
     """
     import concurrent.futures
     from queue import Queue
     import threading
+    from tgl.transcribe_ui import TranscriptionApp, EpisodeState
 
     cache = MetadataCache()
     transcription_cache = TranscriptionCache()
@@ -1033,7 +1232,18 @@ def transcribe(
     if all_episodes:
         episodes_to_process = cache.get_all_episodes()
     elif episode_ids:
+        # Expand any ranges first (e.g., E100-E150)
+        expanded_ids = []
         for ep_id_str in episode_ids:
+            range_ids = parse_episode_range(ep_id_str, cache.get_all_episodes())
+            expanded_ids.extend(range_ids)
+
+        # Show expanded range info
+        if len(expanded_ids) > len(episode_ids):
+            console.print(f"[dim]Expanded to {len(expanded_ids)} episode(s)[/dim]")
+
+        # Find episodes for all IDs (including expanded ranges)
+        for ep_id_str in expanded_ids:
             episode, _ = find_episode_by_id_or_guid(cache.get_all_episodes(), ep_id_str)
             if episode:
                 episodes_to_process.append(episode)
@@ -1062,148 +1272,341 @@ def transcribe(
         console.print("[green]All episodes already transcribed[/green]")
         return
 
-    console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
-    console.print(f"[bold cyan]Transcribing {len(episodes_to_process)} Episode(s)[/bold cyan]")
-    console.print(f"[bold cyan]{'═' * 60}[/bold cyan]\n")
-
-    # Check which episodes need downloading
-    episodes_needing_download = []
-    for ep in episodes_to_process:
-        audio_path = _get_cached_audio_path(ep)
-        if not audio_path or not audio_path.exists():
-            episodes_needing_download.append(ep)
-
-    # Download needed episodes first
-    if episodes_needing_download:
-        console.print(f"[cyan]Downloading {len(episodes_needing_download)} episode(s)...[/cyan]")
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            TaskProgressColumn(),
-            console=console
-        ) as progress:
-            download_task = progress.add_task("Downloading episodes", total=len(episodes_needing_download))
-
-            def download_episode(ep):
-                try:
-                    _download_episode(ep, force=False)
-                    progress.advance(download_task)
-                    return (ep, None)
-                except Exception as e:
-                    progress.advance(download_task)
-                    return (ep, str(e))
-
-            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
-                download_results = list(executor.map(download_episode, episodes_needing_download))
-
-            # Check for download errors
-            download_errors = [(ep, err) for ep, err in download_results if err]
-            if download_errors:
-                console.print(f"\n[yellow]Warning: {len(download_errors)} episode(s) failed to download:[/yellow]")
-                for ep, err in download_errors:
-                    console.print(f"  {ep.episode_id}: {err}")
-                # Remove failed episodes from processing
-                failed_guids = {ep.guid for ep, _ in download_errors}
-                episodes_to_process = [ep for ep in episodes_to_process if ep.guid not in failed_guids]
-
-        console.print()
-
-    if not episodes_to_process:
-        console.print("[red]No episodes available to transcribe[/red]")
+    # Use simple progress bars if --no-ui flag is set
+    if no_ui:
+        _transcribe_no_ui(episodes_to_process, transcription_cache, cache, model_size=model)
         return
 
-    # Transcribe episodes
-    console.print(f"[cyan]Transcribing {len(episodes_to_process)} episode(s)...[/cyan]")
+    # Queues for coordinating work
+    # ARCHITECTURE:
+    # - Downloads happen in worker threads (3 concurrent)
+    # - Downloaded episodes go into transcribe_queue
+    # - DEDICATED transcription worker thread owns PyTorch model and does transcription
+    # - Transcription worker sends messages to results_queue (only simple Python objects!)
+    # - TUI reads messages from results_queue and updates UI
+    # - NO PyTorch tensors ever cross thread boundaries!
+    download_queue = Queue()
+    transcribe_queue = Queue()
+    results_queue = Queue()  # For messages from transcription worker to TUI
+    shutdown_event = threading.Event()  # Signal workers to stop
 
-    from rich.progress import TimeElapsedColumn
+    # Store thread references for graceful shutdown
+    worker_threads = []
 
-    with Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TaskProgressColumn(),
-        TimeRemainingColumn(),
-        TimeElapsedColumn(),
-        console=console
-    ) as progress:
-        overall_task = progress.add_task(
-            "Overall progress",
-            total=len(episodes_to_process)
-        )
+    # Fill download queue
+    for ep in episodes_to_process:
+        download_queue.put(ep)
 
-        transcription_count = 0
-        error_count = 0
+    # Worker function for downloads (runs in worker threads)
+    def download_worker(app: TranscriptionApp):
+        """Download episodes and queue them for transcription"""
+        import httpx
 
-        for idx, ep in enumerate(episodes_to_process, 1):
-            audio_path = _get_cached_audio_path(ep)
-            if not audio_path or not audio_path.exists():
-                console.print(f"[yellow]Warning: Audio file not found for {ep.episode_id}, skipping[/yellow]")
-                progress.advance(overall_task)
-                error_count += 1
+        while not shutdown_event.is_set():
+            try:
+                ep = download_queue.get_nowait()
+            except:
+                # Queue empty, exit normally
+                break
+
+            # Check for shutdown before processing
+            if shutdown_event.is_set():
+                download_queue.task_done()
+                break
+
+            guid = ep.guid or str(ep.id)
+
+            # Check if already exists in episodes dir
+            if _get_cached_audio_path(ep):
+                # Already downloaded, skip to transcription
+                transcribe_queue.put(ep)
+                download_queue.task_done()
                 continue
 
-            # Show current episode being transcribed
-            current_task = progress.add_task(
-                f"[cyan]Transcribing {ep.episode_id}: {ep.title[:40]}...[/cyan]",
-                total=None  # Indeterminate progress (spinner only)
+            # Get destination path (create parent dirs)
+            dest_path = _get_episode_audio_path(ep, check_exists=False)
+            dest_path.parent.mkdir(parents=True, exist_ok=True)
+
+            # Check if file exists in audio cache (from download command)
+            if ep.audio_url:
+                cached_audio = _get_audio_cache_path(ep.audio_url)
+                if cached_audio.exists():
+                    # File exists in cache, create hard link instead of re-downloading
+                    try:
+                        import os
+                        if dest_path.exists():
+                            dest_path.unlink()
+                        os.link(cached_audio, dest_path)
+
+                        # Mark as downloaded (from cache)
+                        app.call_from_thread(
+                            app.update_episode_state,
+                            guid,
+                            EpisodeState.DOWNLOADED
+                        )
+                        app.call_from_thread(app.clear_download)
+
+                        # Queue for transcription
+                        transcribe_queue.put(ep)
+                        download_queue.task_done()
+                        continue
+                    except Exception as e:
+                        # Hard link failed, fall through to download
+                        console.print(f"[yellow]Warning: Could not link from cache for {ep.episode_id}: {e}[/yellow]")
+                        if dest_path.exists():
+                            dest_path.unlink()
+
+            # Update UI: start downloading
+            app.call_from_thread(
+                app.update_episode_state,
+                guid,
+                EpisodeState.DOWNLOADING,
+                download_progress=0.0
+            )
+            app.call_from_thread(
+                app.update_download_progress,
+                ep.episode_id or "Unknown",
+                0.0
             )
 
             try:
-                # Transcribe the audio (this is a blocking call)
-                transcription_text = transcribe_audio(audio_path)
+                if not ep.audio_url:
+                    raise RuntimeError("No audio URL available")
 
-                # Save transcription
-                guid = ep.guid or str(ep.id)
-                transcription_cache.add_transcription(guid, transcription_text)
-                transcription_cache.save()
+                # Download with progress tracking
+                with httpx.stream("GET", ep.audio_url, follow_redirects=True, timeout=300.0) as response:
+                    response.raise_for_status()
+                    total_size = int(response.headers.get('content-length', 0))
 
-                transcription_count += 1
-                progress.remove_task(current_task)
-                progress.advance(overall_task)
+                    with open(dest_path, 'wb') as f:
+                        downloaded = 0
+                        for chunk in response.iter_bytes(chunk_size=8192):
+                            f.write(chunk)
+                            downloaded += len(chunk)
+
+                            if total_size > 0:
+                                progress_pct = (downloaded / total_size) * 100
+                                app.call_from_thread(
+                                    app.update_episode_state,
+                                    guid,
+                                    EpisodeState.DOWNLOADING,
+                                    download_progress=progress_pct
+                                )
+                                app.call_from_thread(
+                                    app.update_download_progress,
+                                    ep.episode_id or "Unknown",
+                                    progress_pct,
+                                    f"{downloaded / 1024 / 1024:.1f}MB / {total_size / 1024 / 1024:.1f}MB"
+                                )
+
+                # Mark as downloaded
+                app.call_from_thread(
+                    app.update_episode_state,
+                    guid,
+                    EpisodeState.DOWNLOADED
+                )
+                app.call_from_thread(app.clear_download)
+
+                # Queue for transcription
+                transcribe_queue.put(ep)
 
             except Exception as e:
-                console.print(f"[red]Error transcribing {ep.episode_id}: {e}[/red]")
-                progress.remove_task(current_task)
-                progress.advance(overall_task)
-                error_count += 1
+                # Mark as error and log it
+                import traceback
+                error_msg = f"{type(e).__name__}: {str(e)}"
+                app.call_from_thread(
+                    app.update_episode_state,
+                    guid,
+                    EpisodeState.ERROR,
+                    error_message=error_msg
+                )
+                app.call_from_thread(app.clear_download)
+                # Log full traceback for debugging
+                console.print(f"\n[red]Download error for {ep.episode_id}:[/red]")
+                console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+            download_queue.task_done()
+
+    # Dedicated transcription worker (runs in its own thread, owns PyTorch model)
+    def transcription_worker():
+        """Transcribe episodes - THIS THREAD OWNS ALL PyTorch OPERATIONS!"""
+        from tgl.transcribe_ui import TranscriptionMessage
+
+        # This thread will keep running until all episodes are processed or shutdown
+        while not shutdown_event.is_set():
+            try:
+                ep = transcribe_queue.get(timeout=1.0)
+            except:
+                # Check if downloads are done or shutdown requested
+                if download_queue.unfinished_tasks == 0 or shutdown_event.is_set():
+                    break
+                continue
+
+            # Check for shutdown before processing
+            if shutdown_event.is_set():
+                transcribe_queue.task_done()
+                break
+
+            guid = ep.guid or str(ep.id)
+            audio_path = _get_cached_audio_path(ep)
+
+            if not audio_path or not audio_path.exists():
+                # Send error message (only simple Python objects!)
+                results_queue.put(TranscriptionMessage.error(guid, "Audio file not found"))
+                transcribe_queue.task_done()
+                continue
+
+            # Send message that we're starting (only simple Python objects!)
+            results_queue.put({"type": "start", "guid": guid})
+
+            # Callbacks to send messages to TUI (only simple Python objects!)
+            def on_segment(text: str):
+                results_queue.put(TranscriptionMessage.segment(guid, text))
+
+            def on_progress(pct: float):
+                results_queue.put(TranscriptionMessage.progress(guid, pct))
+
+            def on_shutdown_check() -> bool:
+                return shutdown_event.is_set()
+
+            try:
+                # Transcribe - THIS IS THE ONLY PLACE PyTorch IS USED!
+                # All PyTorch tensors stay in this thread!
+                transcription_text, segments = transcribe_audio(
+                    audio_path,
+                    model_size=model,
+                    segment_callback=on_segment,
+                    progress_callback=on_progress,
+                    shutdown_callback=on_shutdown_check
+                )
+
+                # Send completion message with segments (only simple Python objects!)
+                results_queue.put(TranscriptionMessage.complete(guid, transcription_text, segments))
+
+            except Exception as e:
+                # Check if this was a shutdown abort
+                if "aborted due to shutdown" in str(e):
+                    # Don't send error message for intentional shutdown
+                    transcribe_queue.task_done()
+                    break
+
+                # Send error message (only simple Python objects!)
+                import traceback
+                error_msg = f"{type(e).__name__}: {str(e)}"
+                results_queue.put(TranscriptionMessage.error(guid, error_msg))
+                console.print(f"\n[red]Transcription error for {ep.episode_id}:[/red]")
+                console.print(f"[dim]{traceback.format_exc()}[/dim]")
+
+            transcribe_queue.task_done()
+
+    # Start workers callback
+    def start_workers(app: TranscriptionApp):
+        """Start download and transcription workers"""
+        # Start download workers (3 concurrent downloads)
+        for i in range(3):
+            t = threading.Thread(target=download_worker, args=(app,), daemon=False, name=f"Download-{i+1}")
+            t.start()
+            worker_threads.append(t)
+
+        # Start dedicated transcription worker (owns PyTorch model!)
+        transcribe_thread = threading.Thread(target=transcription_worker, daemon=False, name="Transcription")
+        transcribe_thread.start()
+        worker_threads.append(transcribe_thread)
+
+    # Create and run the TUI
+    # ARCHITECTURE:
+    # - TUI runs in Textual's event loop
+    # - Download workers run in 3 threads
+    # - Transcription worker runs in 1 dedicated thread (owns PyTorch!)
+    # - Communication via results_queue (only simple Python objects!)
+    app_instance = TranscriptionApp(
+        episodes=episodes_to_process,
+        transcription_cache=transcription_cache,
+        download_callback=start_workers,
+        results_queue=results_queue
+    )
+    app_instance.run(mouse=False)
+
+    # TUI has exited - signal workers to shut down gracefully
+    console.print("[dim]Shutting down workers...[/dim]")
+    shutdown_event.set()
+
+    # Wait for all worker threads to finish (with timeout)
+    # Short timeout since transcription aborts immediately on shutdown
+    for thread in worker_threads:
+        thread.join(timeout=3.0)
+        if thread.is_alive():
+            console.print(f"[yellow]Warning: {thread.name} thread did not finish within 3 seconds[/yellow]")
+
+    # Print summary
+    from tgl.transcribe_ui import EpisodeState
+    statuses = app_instance.episode_statuses
+    transcribed_episodes = [s for s in statuses.values() if s.state == EpisodeState.TRANSCRIBED]
+    failed_episodes = [s for s in statuses.values() if s.state == EpisodeState.ERROR]
 
     console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
-    console.print(f"[green]✓[/green] Transcribed {transcription_count} episode(s)")
-    if error_count > 0:
-        console.print(f"[yellow]⚠[/yellow] {error_count} episode(s) failed")
+    console.print(f"[bold cyan]Transcription Summary[/bold cyan]")
     console.print(f"[bold cyan]{'═' * 60}[/bold cyan]\n")
 
+    if transcribed_episodes:
+        console.print(f"[green]✓ Successfully transcribed {len(transcribed_episodes)} episode(s):[/green]")
+        for status in transcribed_episodes:
+            console.print(f"  • {status.episode.episode_id}: {status.episode.title[:50]}")
+        console.print()
+
+    if failed_episodes:
+        console.print(f"[red]✗ Failed {len(failed_episodes)} episode(s):[/red]")
+        for status in failed_episodes:
+            console.print(f"  • [bold]{status.episode.episode_id}[/bold]: {status.episode.title[:50]}")
+            if status.error_message:
+                console.print(f"    [dim]Error: {status.error_message}[/dim]")
+        console.print()
+
     # Rebuild search index to include new transcriptions
-    console.print("[cyan]Updating search index...[/cyan]")
-    search_index = SearchIndex()
-    search_index.build_index(cache.episodes)
-    console.print("[green]✓[/green] Search index updated\n")
+    if transcribed_episodes:
+        console.print("[cyan]Updating search index...[/cyan]")
+        search_index = SearchIndex()
+        search_index.build_index(cache.episodes)
+        console.print("[green]✓[/green] Search index updated\n")
 
 
-def _get_cached_audio_path(episode) -> Optional[Path]:
-    """Get the path to a cached audio file for an episode"""
+def _get_episode_audio_path(episode, check_exists: bool = True) -> Optional[Path]:
+    """Get the path to an episode's audio file
+
+    Args:
+        episode: Episode object
+        check_exists: If True, return None if file doesn't exist
+
+    Returns:
+        Path to audio file, or None if check_exists=True and file doesn't exist
+    """
     if episode.episode_type == 'TGL':
         episodes_subdir = paths.episodes_dir / "tgl"
     else:
         episodes_subdir = paths.episodes_dir / "bonus"
 
     # Extract extension from audio URL
+    ext = '.mp3'  # Default
     if episode.audio_url:
         parsed = urlparse(episode.audio_url)
         path_parts = Path(parsed.path).parts
         for part in reversed(path_parts):
             if '.' in part:
-                ext = Path(part).suffix
-                if ext:
+                found_ext = Path(part).suffix
+                if found_ext:
+                    ext = found_ext
                     break
-        else:
-            ext = '.mp3'  # Default
-    else:
-        ext = '.mp3'
 
     audio_path = episodes_subdir / f"{episode.episode_id}{ext}"
-    return audio_path if audio_path.exists() else None
+
+    if check_exists:
+        return audio_path if audio_path.exists() else None
+    return audio_path
+
+
+def _get_cached_audio_path(episode) -> Optional[Path]:
+    """Get the path to a cached audio file for an episode (returns None if doesn't exist)"""
+    return _get_episode_audio_path(episode, check_exists=True)
 
 
 def _download_episode(episode, force=False):
@@ -1248,9 +1651,6 @@ def _download_episode(episode, force=False):
                 f.write(chunk)
 
     return dest_path
-
-
-    console.print(f"[dim]Audio cache: {paths.audio_cache_dir}[/dim]\n")
 
 
 @app.command()
@@ -1518,18 +1918,20 @@ def find_episode_gaps(cached_episodes, console_obj):
 
 @app.command()
 def doctor(
-    section: Optional[str] = typer.Argument(None, help="Section to show: 'missing', 'gaps', 'spotify', or 'all' (default: all)")
+    section: Optional[str] = typer.Argument(None, help="Section to show: 'missing', 'gaps', 'spotify', 'titles', or 'all' (default: all)")
 ):
     """Diagnose issues with episode metadata and Spotify track mappings
 
     This command helps identify:
     - Episodes available in RSS feed but missing from metadata cache
+    - Gaps in TGL episode numbering
     - Tracks in metadata that couldn't be found on Spotify
+    - Episode title processing (full vs cleaned titles)
     """
     import json
 
     # Normalize section argument
-    valid_sections = {'missing', 'gaps', 'spotify', 'all'}
+    valid_sections = {'missing', 'gaps', 'spotify', 'titles', 'all'}
     if section:
         section = section.lower()
         if section not in valid_sections:
@@ -1541,6 +1943,7 @@ def doctor(
     show_missing = section in ('missing', 'all')
     show_gaps = section in ('gaps', 'all')
     show_spotify = section in ('spotify', 'all')
+    show_titles = section == 'titles'  # Only show when explicitly requested
 
     console.print("\n[bold cyan]" + "═" * 70)
     console.print("[bold cyan]TGL Doctor - Diagnostics Report")
@@ -1707,6 +2110,35 @@ def doctor(
                     console.print()
             else:
                 console.print("[green]✓ All tracks have been found on Spotify[/green]\n")
+
+    # Section 4: Episode title processing (full vs cleaned)
+    if show_titles:
+        console.print("[bold]4. Episode Title Processing:[/bold]\n")
+        console.print("[dim]Shows how episode titles are cleaned (removing episode numbers and podcast name)[/dim]\n")
+
+        episodes = cache.get_all_episodes()
+        # Show oldest first for chronological view
+        episodes = sorted(episodes, key=lambda ep: ep.id)
+
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("Type", justify="center", width=4)
+        table.add_column("ID", style="green", justify="right", width=6)
+        table.add_column("Full Title (RSS)", style="white", no_wrap=False, overflow="fold")
+        table.add_column("Processed Title", style="cyan", no_wrap=False, overflow="fold")
+
+        for episode in episodes:
+            # Get episode type icon
+            type_icon = "🎧" if episode.episode_type == "TGL" else "🎁"
+
+            # Show full title vs processed title
+            full_title = episode.full_title
+            processed_title = episode.title if episode.title else "[dim](empty)[/dim]"
+
+            table.add_row(type_icon, episode.episode_id, full_title, processed_title)
+
+        console.print(table)
+        console.print(f"\n[dim]Total: {len(episodes)} episodes[/dim]")
+        console.print(f"[dim]💡 Full titles show the original RSS title, processed titles show the cleaned version[/dim]\n")
 
     console.print("[bold cyan]" + "═" * 70)
     console.print("[bold cyan]End of Report")

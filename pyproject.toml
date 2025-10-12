@@ -19,6 +19,7 @@ dependencies = [
     "tomli-w>=1.0.0",
     "pillow>=10.0.0",
     "mutagen>=1.47.0",
+    "insanely-fast-whisper>=0.0.15",
 ]
 
 [project.optional-dependencies]

@@ -27,6 +27,8 @@ from tgl import (
     parse_episode_id,
     Track,
     paths,
+    TranscriptionCache,
+    transcribe_audio,
 )
 
 # Initialize console and app
@@ -62,6 +64,7 @@ def main(ctx: typer.Context):
         console.print("  [cyan]set[/cyan]                  Set episode metadata field")
         console.print("  [cyan]search[/cyan]               Search episodes by title, description, or tracks")
         console.print("  [cyan]download[/cyan]             Download an episode audio file")
+        console.print("  [cyan]transcribe[/cyan]           Transcribe episodes using Whisper AI")
         console.print("  [cyan]spotify[/cyan]              Import tracklists to Spotify playlist")
         console.print("  [cyan]update[/cyan]               Update episode metadata from RSS feed")
         console.print("  [cyan]config[/cyan]               Manage TGL configuration\n")
@@ -84,6 +87,9 @@ def main(ctx: typer.Context):
 
         console.print("  [dim]# Search for episodes about house music[/dim]")
         console.print("  [green]tgl.py search \"house music\"[/green]\n")
+
+        console.print("  [dim]# Transcribe an episode[/dim]")
+        console.print("  [green]tgl.py transcribe E390[/green]\n")
 
         console.print("  [dim]# Update the episode cache[/dim]")
         console.print("  [green]tgl.py update[/green]\n")
@@ -986,6 +992,255 @@ def download(
                 console.print(f"    [dim]Audio URL:[/dim] [link={url}]{url[:80]}{'...' if len(url) > 80 else ''}[/link]")
 
     console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]")
+
+
+@app.command()
+def transcribe(
+    episode_ids: Optional[List[str]] = typer.Argument(None, help="Episode IDs to transcribe (e.g., E390 E391 B01)"),
+    all_episodes: bool = typer.Option(False, "--all", help="Transcribe all episodes"),
+    force: bool = typer.Option(False, "--force", "-f", help="Re-transcribe even if transcription exists")
+):
+    """Transcribe episode audio files using Whisper AI
+
+    Downloads episodes if needed, then transcribes them using insanely-fast-whisper.
+    Transcriptions are automatically integrated into the search index.
+
+    Examples:
+      tgl transcribe E390           # Transcribe single episode
+      tgl transcribe E390 E391 B01  # Transcribe multiple episodes
+      tgl transcribe --all          # Transcribe all episodes
+      tgl transcribe E390 --force   # Re-transcribe even if exists
+    """
+    import concurrent.futures
+    from queue import Queue
+    import threading
+
+    cache = MetadataCache()
+    transcription_cache = TranscriptionCache()
+
+    # Auto-refresh if cache is stale or empty
+    if cache.should_auto_refresh():
+        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+        cache.refresh(fetcher)
+
+    if not cache.episodes:
+        console.print("[red]Error: Could not load episodes[/red]")
+        raise typer.Exit(1)
+
+    # Determine which episodes to transcribe
+    episodes_to_process = []
+
+    if all_episodes:
+        episodes_to_process = cache.get_all_episodes()
+    elif episode_ids:
+        for ep_id_str in episode_ids:
+            episode, _ = find_episode_by_id_or_guid(cache.get_all_episodes(), ep_id_str)
+            if episode:
+                episodes_to_process.append(episode)
+            else:
+                console.print(f"[yellow]Warning: Episode {ep_id_str} not found, skipping[/yellow]")
+    else:
+        console.print("[red]Error: Provide episode IDs or use --all flag[/red]")
+        raise typer.Exit(1)
+
+    if not episodes_to_process:
+        console.print("[yellow]No episodes to transcribe[/yellow]")
+        return
+
+    # Filter episodes that need transcription
+    if not force:
+        episodes_needing_transcription = [
+            ep for ep in episodes_to_process
+            if not transcription_cache.has_transcription(ep.guid or str(ep.id))
+        ]
+        skipped_count = len(episodes_to_process) - len(episodes_needing_transcription)
+        if skipped_count > 0:
+            console.print(f"[dim]Skipping {skipped_count} episode(s) with existing transcriptions[/dim]")
+        episodes_to_process = episodes_needing_transcription
+
+    if not episodes_to_process:
+        console.print("[green]All episodes already transcribed[/green]")
+        return
+
+    console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
+    console.print(f"[bold cyan]Transcribing {len(episodes_to_process)} Episode(s)[/bold cyan]")
+    console.print(f"[bold cyan]{'═' * 60}[/bold cyan]\n")
+
+    # Check which episodes need downloading
+    episodes_needing_download = []
+    for ep in episodes_to_process:
+        audio_path = _get_cached_audio_path(ep)
+        if not audio_path or not audio_path.exists():
+            episodes_needing_download.append(ep)
+
+    # Download needed episodes first
+    if episodes_needing_download:
+        console.print(f"[cyan]Downloading {len(episodes_needing_download)} episode(s)...[/cyan]")
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console
+        ) as progress:
+            download_task = progress.add_task("Downloading episodes", total=len(episodes_needing_download))
+
+            def download_episode(ep):
+                try:
+                    _download_episode(ep, force=False)
+                    progress.advance(download_task)
+                    return (ep, None)
+                except Exception as e:
+                    progress.advance(download_task)
+                    return (ep, str(e))
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+                download_results = list(executor.map(download_episode, episodes_needing_download))
+
+            # Check for download errors
+            download_errors = [(ep, err) for ep, err in download_results if err]
+            if download_errors:
+                console.print(f"\n[yellow]Warning: {len(download_errors)} episode(s) failed to download:[/yellow]")
+                for ep, err in download_errors:
+                    console.print(f"  {ep.episode_id}: {err}")
+                # Remove failed episodes from processing
+                failed_guids = {ep.guid for ep, _ in download_errors}
+                episodes_to_process = [ep for ep in episodes_to_process if ep.guid not in failed_guids]
+
+        console.print()
+
+    if not episodes_to_process:
+        console.print("[red]No episodes available to transcribe[/red]")
+        return
+
+    # Transcribe episodes
+    console.print(f"[cyan]Transcribing {len(episodes_to_process)} episode(s)...[/cyan]")
+
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TimeRemainingColumn(),
+        console=console
+    ) as progress:
+        overall_task = progress.add_task("Overall progress", total=len(episodes_to_process))
+        current_task = progress.add_task("Current episode", total=100)
+
+        transcription_count = 0
+        error_count = 0
+
+        for ep in episodes_to_process:
+            audio_path = _get_cached_audio_path(ep)
+            if not audio_path or not audio_path.exists():
+                console.print(f"[yellow]Warning: Audio file not found for {ep.episode_id}, skipping[/yellow]")
+                progress.advance(overall_task)
+                error_count += 1
+                continue
+
+            try:
+                progress.update(current_task, description=f"Transcribing {ep.episode_id}: {ep.title[:40]}...")
+                progress.reset(current_task)
+
+                # Transcribe the audio
+                transcription_text = transcribe_audio(audio_path)
+
+                # Save transcription
+                guid = ep.guid or str(ep.id)
+                transcription_cache.add_transcription(guid, transcription_text)
+                transcription_cache.save()
+
+                transcription_count += 1
+                progress.update(current_task, completed=100)
+                progress.advance(overall_task)
+
+            except Exception as e:
+                console.print(f"[red]Error transcribing {ep.episode_id}: {e}[/red]")
+                progress.advance(overall_task)
+                error_count += 1
+
+    console.print(f"\n[bold cyan]{'═' * 60}[/bold cyan]")
+    console.print(f"[green]✓[/green] Transcribed {transcription_count} episode(s)")
+    if error_count > 0:
+        console.print(f"[yellow]⚠[/yellow] {error_count} episode(s) failed")
+    console.print(f"[bold cyan]{'═' * 60}[/bold cyan]\n")
+
+    # Rebuild search index to include new transcriptions
+    console.print("[cyan]Updating search index...[/cyan]")
+    search_index = SearchIndex()
+    search_index.build_index(cache.episodes)
+    console.print("[green]✓[/green] Search index updated\n")
+
+
+def _get_cached_audio_path(episode) -> Optional[Path]:
+    """Get the path to a cached audio file for an episode"""
+    if episode.episode_type == 'TGL':
+        episodes_subdir = paths.episodes_dir / "tgl"
+    else:
+        episodes_subdir = paths.episodes_dir / "bonus"
+
+    # Extract extension from audio URL
+    if episode.audio_url:
+        parsed = urlparse(episode.audio_url)
+        path_parts = Path(parsed.path).parts
+        for part in reversed(path_parts):
+            if '.' in part:
+                ext = Path(part).suffix
+                if ext:
+                    break
+        else:
+            ext = '.mp3'  # Default
+    else:
+        ext = '.mp3'
+
+    audio_path = episodes_subdir / f"{episode.episode_id}{ext}"
+    return audio_path if audio_path.exists() else None
+
+
+def _download_episode(episode, force=False):
+    """Download a single episode (helper for transcribe command)"""
+    import httpx
+
+    if episode.episode_type == 'TGL':
+        episodes_subdir = paths.episodes_dir / "tgl"
+    else:
+        episodes_subdir = paths.episodes_dir / "bonus"
+
+    episodes_subdir.mkdir(parents=True, exist_ok=True)
+
+    # Extract extension from URL
+    if episode.audio_url:
+        parsed = urlparse(episode.audio_url)
+        path_parts = Path(parsed.path).parts
+        for part in reversed(path_parts):
+            if '.' in part:
+                ext = Path(part).suffix
+                if ext:
+                    break
+        else:
+            ext = '.mp3'
+    else:
+        ext = '.mp3'
+
+    dest_path = episodes_subdir / f"{episode.episode_id}{ext}"
+
+    # Skip if exists and not forcing
+    if dest_path.exists() and not force:
+        return dest_path
+
+    if not episode.audio_url:
+        raise RuntimeError("No audio URL available")
+
+    # Download the file
+    with httpx.stream("GET", episode.audio_url, follow_redirects=True, timeout=300.0) as response:
+        response.raise_for_status()
+        with open(dest_path, 'wb') as f:
+            for chunk in response.iter_bytes(chunk_size=8192):
+                f.write(chunk)
+
+    return dest_path
+
+
     console.print(f"[dim]Audio cache: {paths.audio_cache_dir}[/dim]\n")
 
 

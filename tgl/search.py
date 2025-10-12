@@ -9,6 +9,7 @@ from whoosh.qparser import MultifieldParser, OrGroup
 
 from .models import Episode
 from .config import paths
+from .transcribe import TranscriptionCache
 
 
 class SearchIndex:
@@ -25,10 +26,12 @@ class SearchIndex:
         self.schema = Schema(
             episode_id=ID(stored=True),
             episode_id_str=STORED(),
+            guid=STORED(),
             title=TEXT(stored=True, field_boost=3.0),
             description=TEXT(field_boost=1.0),
             artists=TEXT(field_boost=5.0),
             track_titles=TEXT(field_boost=2.0),
+            transcription=TEXT(field_boost=1.5),
             episode_type=STORED()
         )
 
@@ -38,19 +41,26 @@ class SearchIndex:
         else:
             self.ix = index.create_in(str(self.index_dir), self.schema)
 
-    def build_index(self, episodes: Dict[int, Episode]):
-        """Build search index from episodes using Whoosh"""
+    def build_index(self, episodes: Dict[str, Episode]):
+        """Build search index from episodes using Whoosh
+
+        Args:
+            episodes: Dictionary mapping GUIDs to Episode objects
+        """
         # Clear existing index by recreating it
         if self.index_dir.exists():
             shutil.rmtree(self.index_dir)
         self.index_dir.mkdir(exist_ok=True)
         self.ix = index.create_in(str(self.index_dir), self.schema)
 
+        # Load transcriptions
+        transcription_cache = TranscriptionCache()
+
         # Get a writer and add all documents
         writer = self.ix.writer()
 
         try:
-            for ep_id, episode in episodes.items():
+            for guid, episode in episodes.items():
                 # Collect all track artists and titles
                 artists = []
                 track_titles = []
@@ -59,14 +69,19 @@ class SearchIndex:
                         artists.append(track.artist)
                         track_titles.append(track.title)
 
+                # Get transcription if available
+                transcription = transcription_cache.get_transcription(guid) or ""
+
                 # Add document to index
                 writer.add_document(
-                    episode_id=str(ep_id),
-                    episode_id_str=episode.episode_id or f"E{ep_id}",
+                    episode_id=str(episode.id),
+                    episode_id_str=episode.episode_id or f"E{episode.id}",
+                    guid=guid,
                     title=episode.title,
                     description=episode.description_text or "",
                     artists=" ".join(artists),
                     track_titles=" ".join(track_titles),
+                    transcription=transcription,
                     episode_type=episode.episode_type
                 )
 
@@ -75,14 +90,19 @@ class SearchIndex:
             writer.cancel()
             raise e
 
-    def search(self, query: str, episodes: Dict[int, Episode]) -> List[Dict]:
+    def search(self, query: str, episodes: Dict[str, Episode]) -> List[Dict]:
         """Search episodes using Whoosh
 
-        Returns list of matches with relevance scores.
+        Args:
+            query: Search query string
+            episodes: Dictionary mapping GUIDs to Episode objects
+
+        Returns:
+            List of matches with relevance scores
         """
-        # Create multifield parser
+        # Create multifield parser - now includes transcription
         parser = MultifieldParser(
-            ["title", "description", "artists", "track_titles"],
+            ["title", "description", "artists", "track_titles", "transcription"],
             schema=self.schema,
             group=OrGroup
         )
@@ -95,8 +115,18 @@ class SearchIndex:
             search_results = searcher.search(q, limit=100, terms=True)
 
             for hit in search_results:
-                ep_id = int(hit['episode_id'])
-                episode = episodes.get(ep_id)
+                # Get episode by GUID (stored in the index)
+                guid = hit.get('guid')
+                episode = episodes.get(guid) if guid else None
+
+                # Fallback to old ID-based lookup for backwards compatibility
+                if not episode:
+                    ep_id = int(hit['episode_id'])
+                    # Try to find episode by ID in the values
+                    for ep_guid, ep in episodes.items():
+                        if ep.id == ep_id:
+                            episode = ep
+                            break
 
                 if not episode:
                     continue
@@ -111,7 +141,9 @@ class SearchIndex:
                 # Extract the actual matched terms for better context (decode bytes to strings)
                 query_terms = set(term.decode('utf-8') if isinstance(term, bytes) else term for field, term in matched_terms)
 
-                if 'artists' in field_names:
+                if 'transcription' in field_names:
+                    match_context = "Transcription match"
+                elif 'artists' in field_names:
                     # Find which artist matched
                     if episode.tracklist:
                         for track in episode.tracklist:

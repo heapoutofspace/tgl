@@ -6,6 +6,7 @@ from .cache import MetadataCache
 from .search import SearchIndex
 from .fetcher import PatreonPodcastFetcher
 from .spotify import SpotifyManager
+from .transcribe import TranscriptionCache, transcribe_audio
 
 __version__ = "0.1.0"
 
@@ -20,6 +21,8 @@ __all__ = [
     "SearchIndex",
     "PatreonPodcastFetcher",
     "SpotifyManager",
+    "TranscriptionCache",
+    "transcribe_audio",
     "paths",
     "TGLPaths",
 ]

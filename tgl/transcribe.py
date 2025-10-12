@@ -86,7 +86,7 @@ class TranscriptionCache:
 
 
 def transcribe_audio(audio_path: Path, model: str = "openai/whisper-large-v3") -> str:
-    """Transcribe an audio file using insanely-fast-whisper
+    """Transcribe an audio file using insanely-fast-whisper Python API
 
     Args:
         audio_path: Path to audio file
@@ -98,72 +98,69 @@ def transcribe_audio(audio_path: Path, model: str = "openai/whisper-large-v3") -
     Raises:
         RuntimeError: If transcription fails
     """
-    import subprocess
-    import tempfile
-    import sys
     import platform
-
-    # Detect available device
-    device_id = "cpu"
-    batch_size = 4  # Conservative default for CPU
 
     try:
         import torch
+        from transformers import pipeline
+        from transformers.utils import is_flash_attn_2_available
+    except ImportError as e:
+        raise RuntimeError(f"Required packages not installed: {e}. Please install transformers, optimum, and accelerate.")
+
+    # Detect available device and configure settings
+    device = "cpu"
+    torch_dtype = torch.float32  # CPU uses float32
+    batch_size = 4  # Conservative default
+
+    try:
         if torch.cuda.is_available():
-            device_id = "0"  # Use first CUDA GPU
-            batch_size = 24  # Larger batch for GPU
+            device = "cuda:0"
+            torch_dtype = torch.float16  # GPU can use float16
+            batch_size = 24
             console.print(f"[dim]Using CUDA GPU for transcription[/dim]")
         elif platform.system() == "Darwin" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device_id = "mps"  # Use Apple Metal Performance Shaders
+            device = "mps"
+            torch_dtype = torch.float16
             batch_size = 4  # Smaller batch for Mac
             console.print(f"[dim]Using MPS (Apple Silicon) for transcription[/dim]")
         else:
             console.print(f"[dim]Using CPU for transcription (this will be slow)[/dim]")
-    except ImportError:
-        console.print(f"[yellow]Warning: PyTorch not found, using CPU[/yellow]")
-
-    # Create a temporary file for the output
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
-        output_file = Path(tmp.name)
+    except Exception as e:
+        console.print(f"[yellow]Warning: Device detection failed, using CPU: {e}[/yellow]")
 
     try:
-        # Run insanely-fast-whisper
-        cmd = [
-            "insanely-fast-whisper",
-            "--file-name", str(audio_path),
-            "--model-name", model,
-            "--batch-size", str(batch_size),
-            "--device-id", device_id,
-            "--transcript-path", str(output_file),
-        ]
+        # Configure model kwargs based on flash attention availability
+        model_kwargs = {}
+        if is_flash_attn_2_available() and device.startswith("cuda"):
+            model_kwargs["attn_implementation"] = "flash_attention_2"
+            console.print(f"[dim]Using Flash Attention 2 for better performance[/dim]")
+        else:
+            model_kwargs["attn_implementation"] = "sdpa"
 
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=True
+        # Create the pipeline
+        pipe = pipeline(
+            "automatic-speech-recognition",
+            model=model,
+            torch_dtype=torch_dtype,
+            device=device,
+            model_kwargs=model_kwargs,
         )
 
-        # Read the transcription from the JSON output
-        with open(output_file, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        # Transcribe the audio
+        outputs = pipe(
+            str(audio_path),
+            chunk_length_s=30,
+            batch_size=batch_size,
+            return_timestamps=False,  # We only need text
+        )
 
-        # Extract just the text
-        if isinstance(data, dict) and 'text' in data:
-            return data['text'].strip()
-        elif isinstance(data, dict) and 'segments' in data:
-            # Concatenate all segment texts
-            segments = data['segments']
-            text = ' '.join(seg.get('text', '') for seg in segments)
-            return text.strip()
+        # Extract text from outputs
+        if isinstance(outputs, dict) and 'text' in outputs:
+            return outputs['text'].strip()
+        elif isinstance(outputs, str):
+            return outputs.strip()
         else:
-            raise RuntimeError(f"Unexpected transcription format: {data}")
+            raise RuntimeError(f"Unexpected output format: {type(outputs)}")
 
-    except subprocess.CalledProcessError as e:
-        raise RuntimeError(f"Transcription failed: {e.stderr}")
     except Exception as e:
-        raise RuntimeError(f"Transcription error: {e}")
-    finally:
-        # Clean up temporary file
-        if output_file.exists():
-            output_file.unlink()
+        raise RuntimeError(f"Transcription failed: {e}")

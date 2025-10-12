@@ -100,6 +100,27 @@ def transcribe_audio(audio_path: Path, model: str = "openai/whisper-large-v3") -
     """
     import subprocess
     import tempfile
+    import sys
+    import platform
+
+    # Detect available device
+    device_id = "cpu"
+    batch_size = 4  # Conservative default for CPU
+
+    try:
+        import torch
+        if torch.cuda.is_available():
+            device_id = "0"  # Use first CUDA GPU
+            batch_size = 24  # Larger batch for GPU
+            console.print(f"[dim]Using CUDA GPU for transcription[/dim]")
+        elif platform.system() == "Darwin" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            device_id = "mps"  # Use Apple Metal Performance Shaders
+            batch_size = 4  # Smaller batch for Mac
+            console.print(f"[dim]Using MPS (Apple Silicon) for transcription[/dim]")
+        else:
+            console.print(f"[dim]Using CPU for transcription (this will be slow)[/dim]")
+    except ImportError:
+        console.print(f"[yellow]Warning: PyTorch not found, using CPU[/yellow]")
 
     # Create a temporary file for the output
     with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
@@ -107,14 +128,12 @@ def transcribe_audio(audio_path: Path, model: str = "openai/whisper-large-v3") -
 
     try:
         # Run insanely-fast-whisper
-        # We use --batch-size 24 for good performance
-        # --device-id 0 uses the first GPU if available, else falls back to CPU
         cmd = [
             "insanely-fast-whisper",
             "--file-name", str(audio_path),
             "--model-name", model,
-            "--batch-size", "24",
-            "--device-id", "0",
+            "--batch-size", str(batch_size),
+            "--device-id", device_id,
             "--transcript-path", str(output_file),
         ]
 

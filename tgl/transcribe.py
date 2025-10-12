@@ -85,12 +85,13 @@ class TranscriptionCache:
         return self.transcriptions.copy()
 
 
-def transcribe_audio(audio_path: Path, model: str = "openai/whisper-large-v3") -> str:
-    """Transcribe an audio file using insanely-fast-whisper Python API
+def transcribe_audio(audio_path: Path, model_size: str = "large-v3", language: str = "en") -> str:
+    """Transcribe an audio file using faster-whisper
 
     Args:
         audio_path: Path to audio file
-        model: Whisper model to use
+        model_size: Whisper model size (e.g., "large-v3", "medium", "small")
+        language: Language code (e.g., "en" for English)
 
     Returns:
         Transcription text
@@ -98,69 +99,64 @@ def transcribe_audio(audio_path: Path, model: str = "openai/whisper-large-v3") -
     Raises:
         RuntimeError: If transcription fails
     """
-    import platform
-
     try:
-        import torch
-        from transformers import pipeline
-        from transformers.utils import is_flash_attn_2_available
+        from faster_whisper import WhisperModel
     except ImportError as e:
-        raise RuntimeError(f"Required packages not installed: {e}. Please install transformers, optimum, and accelerate.")
+        raise RuntimeError(f"faster-whisper not installed: {e}. Please install faster-whisper>=1.0.0")
 
     # Detect available device and configure settings
     device = "cpu"
-    torch_dtype = torch.float32  # CPU uses float32
-    batch_size = 4  # Conservative default
+    compute_type = "int8"  # CPU default
 
     try:
-        if torch.cuda.is_available():
-            device = "cuda:0"
-            torch_dtype = torch.float16  # GPU can use float16
-            batch_size = 24
-            console.print(f"[dim]Using CUDA GPU for transcription[/dim]")
-        elif platform.system() == "Darwin" and hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-            device = "mps"
-            torch_dtype = torch.float16
-            batch_size = 4  # Smaller batch for Mac
-            console.print(f"[dim]Using MPS (Apple Silicon) for transcription[/dim]")
-        else:
-            console.print(f"[dim]Using CPU for transcription (this will be slow)[/dim]")
+        # Check for CUDA
+        try:
+            import torch
+            if torch.cuda.is_available():
+                device = "cuda"
+                compute_type = "float16"
+                console.print(f"[dim]Using CUDA GPU for transcription[/dim]")
+            else:
+                console.print(f"[dim]Using CPU for transcription (this will be slower)[/dim]")
+        except ImportError:
+            console.print(f"[dim]PyTorch not found, using CPU for transcription[/dim]")
     except Exception as e:
         console.print(f"[yellow]Warning: Device detection failed, using CPU: {e}[/yellow]")
 
     try:
-        # Configure model kwargs based on flash attention availability
-        model_kwargs = {}
-        if is_flash_attn_2_available() and device.startswith("cuda"):
-            model_kwargs["attn_implementation"] = "flash_attention_2"
-            console.print(f"[dim]Using Flash Attention 2 for better performance[/dim]")
-        else:
-            model_kwargs["attn_implementation"] = "sdpa"
-
-        # Create the pipeline
-        pipe = pipeline(
-            "automatic-speech-recognition",
-            model=model,
-            torch_dtype=torch_dtype,
+        # Initialize the model
+        # Note: faster-whisper downloads models to cache automatically
+        model = WhisperModel(
+            model_size,
             device=device,
-            model_kwargs=model_kwargs,
+            compute_type=compute_type,
+            download_root=None,  # Use default cache location
         )
+
+        console.print(f"[dim]Model: {model_size}, Language: {language}, Device: {device}, Compute: {compute_type}[/dim]")
 
         # Transcribe the audio
-        outputs = pipe(
+        # beam_size=5 is a good balance between speed and accuracy
+        # vad_filter=True enables voice activity detection to skip silence
+        segments, info = model.transcribe(
             str(audio_path),
-            chunk_length_s=30,
-            batch_size=batch_size,
-            return_timestamps=False,  # We only need text
+            language=language,
+            beam_size=5,
+            vad_filter=True,
+            vad_parameters=dict(min_silence_duration_ms=500),
         )
 
-        # Extract text from outputs
-        if isinstance(outputs, dict) and 'text' in outputs:
-            return outputs['text'].strip()
-        elif isinstance(outputs, str):
-            return outputs.strip()
-        else:
-            raise RuntimeError(f"Unexpected output format: {type(outputs)}")
+        # Collect all segment texts
+        text_parts = []
+        for segment in segments:
+            text_parts.append(segment.text)
+
+        full_text = " ".join(text_parts).strip()
+
+        if not full_text:
+            raise RuntimeError("No text was transcribed from the audio")
+
+        return full_text
 
     except Exception as e:
         raise RuntimeError(f"Transcription failed: {e}")

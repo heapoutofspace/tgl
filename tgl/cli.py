@@ -1116,21 +1116,26 @@ def transcribe(
     # Transcribe episodes
     console.print(f"[cyan]Transcribing {len(episodes_to_process)} episode(s)...[/cyan]")
 
+    from rich.progress import TimeElapsedColumn
+
     with Progress(
         SpinnerColumn(),
         TextColumn("[progress.description]{task.description}"),
         BarColumn(),
         TaskProgressColumn(),
         TimeRemainingColumn(),
+        TimeElapsedColumn(),
         console=console
     ) as progress:
-        overall_task = progress.add_task("Overall progress", total=len(episodes_to_process))
-        current_task = progress.add_task("Current episode", total=100)
+        overall_task = progress.add_task(
+            "Overall progress",
+            total=len(episodes_to_process)
+        )
 
         transcription_count = 0
         error_count = 0
 
-        for ep in episodes_to_process:
+        for idx, ep in enumerate(episodes_to_process, 1):
             audio_path = _get_cached_audio_path(ep)
             if not audio_path or not audio_path.exists():
                 console.print(f"[yellow]Warning: Audio file not found for {ep.episode_id}, skipping[/yellow]")
@@ -1138,11 +1143,14 @@ def transcribe(
                 error_count += 1
                 continue
 
-            try:
-                progress.update(current_task, description=f"Transcribing {ep.episode_id}: {ep.title[:40]}...")
-                progress.reset(current_task)
+            # Show current episode being transcribed
+            current_task = progress.add_task(
+                f"[cyan]Transcribing {ep.episode_id}: {ep.title[:40]}...[/cyan]",
+                total=None  # Indeterminate progress (spinner only)
+            )
 
-                # Transcribe the audio
+            try:
+                # Transcribe the audio (this is a blocking call)
                 transcription_text = transcribe_audio(audio_path)
 
                 # Save transcription
@@ -1151,11 +1159,12 @@ def transcribe(
                 transcription_cache.save()
 
                 transcription_count += 1
-                progress.update(current_task, completed=100)
+                progress.remove_task(current_task)
                 progress.advance(overall_task)
 
             except Exception as e:
                 console.print(f"[red]Error transcribing {ep.episode_id}: {e}[/red]")
+                progress.remove_task(current_task)
                 progress.advance(overall_task)
                 error_count += 1
 

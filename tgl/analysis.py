@@ -24,6 +24,7 @@ class TrackAnalysis(BaseModel):
     """Analysis data for a single track"""
     episodes: List[str] = Field(default_factory=list, description="Episode GUIDs this track appears in")
     lastfm_tags: Optional[List[Dict[str, Any]]] = Field(default=None, description="Last.fm track tags")
+    lastfm_tags_source: Optional[str] = Field(default=None, description="Source of tags: 'track' or 'artist'")
 
     def add_episode(self, guid: str):
         """Add an episode GUID if not already present"""
@@ -207,6 +208,7 @@ class TrackAnalyzer:
 
                 # Extract tags from response
                 tags = []
+                tags_source = "track"
                 if 'toptags' in data and 'tag' in data['toptags']:
                     tag_list = data['toptags']['tag']
                     # Ensure tag_list is a list (single tag returns dict)
@@ -219,13 +221,49 @@ class TrackAnalyzer:
                             'count': int(tag.get('count', 0))
                         })
 
+                # Fallback: if no track tags found, try artist tags
+                if not tags:
+                    console.print(f"    [yellow]⚠[/yellow] No track tags found, trying artist tags...")
+                    time.sleep(rate_limit_delay)  # Rate limit before next request
+
+                    try:
+                        artist_params = {
+                            'method': 'artist.getTopTags',
+                            'artist': artist,
+                            'api_key': self.settings.lastfm_api_key,
+                            'autocorrect': 1,
+                            'format': 'json'
+                        }
+
+                        artist_response = requests.get(url, params=artist_params, timeout=10)
+                        artist_response.raise_for_status()
+                        artist_data = artist_response.json()
+
+                        if 'toptags' in artist_data and 'tag' in artist_data['toptags']:
+                            artist_tag_list = artist_data['toptags']['tag']
+                            if isinstance(artist_tag_list, dict):
+                                artist_tag_list = [artist_tag_list]
+
+                            for tag in artist_tag_list:
+                                tags.append({
+                                    'name': tag.get('name', ''),
+                                    'count': int(tag.get('count', 0))
+                                })
+
+                            tags_source = "artist"
+
+                    except Exception as artist_error:
+                        console.print(f"    [red]✗[/red] Artist tags also failed: {artist_error}")
+
                 # Store tags (empty list if no tags found)
                 self.db.tracks[track_key].lastfm_tags = tags
+                self.db.tracks[track_key].lastfm_tags_source = tags_source if tags else None
                 analyzed_count += 1
 
                 if tags:
                     tag_names = ', '.join([t['name'] for t in tags[:5]])
-                    console.print(f"    [green]✓[/green] Found {len(tags)} tags: [dim]{tag_names}{'...' if len(tags) > 5 else ''}[/dim]")
+                    source_indicator = f" [dim](from {tags_source})[/dim]" if tags_source == "artist" else ""
+                    console.print(f"    [green]✓[/green] Found {len(tags)} tags{source_indicator}: [dim]{tag_names}{'...' if len(tags) > 5 else ''}[/dim]")
                 else:
                     console.print(f"    [yellow]⚠[/yellow] No tags found")
 
@@ -240,11 +278,13 @@ class TrackAnalyzer:
                 console.print(f"    [red]✗[/red] API error: {e}")
                 # Store empty list to mark as attempted (cache the failure)
                 self.db.tracks[track_key].lastfm_tags = []
+                self.db.tracks[track_key].lastfm_tags_source = None
                 failed_count += 1
             except Exception as e:
                 console.print(f"    [red]✗[/red] Error: {e}")
                 # Store empty list to mark as attempted
                 self.db.tracks[track_key].lastfm_tags = []
+                self.db.tracks[track_key].lastfm_tags_source = None
                 failed_count += 1
 
         # Final save
@@ -261,6 +301,8 @@ class TrackAnalyzer:
         total_tracks = len(self.db.tracks)
         tracks_with_tags = sum(1 for t in self.db.tracks.values() if t.lastfm_tags is not None and len(t.lastfm_tags) > 0)
         tracks_attempted = sum(1 for t in self.db.tracks.values() if t.lastfm_tags is not None)
+        tags_from_track = sum(1 for t in self.db.tracks.values() if t.lastfm_tags_source == "track")
+        tags_from_artist = sum(1 for t in self.db.tracks.values() if t.lastfm_tags_source == "artist")
 
         # Calculate appearance statistics
         appearances = [len(t.episodes) for t in self.db.tracks.values()]
@@ -269,6 +311,10 @@ class TrackAnalyzer:
 
         console.print(f"Total unique tracks: [bold]{total_tracks}[/bold]")
         console.print(f"Tracks with Last.fm tags: [bold]{tracks_with_tags}[/bold] ({tracks_with_tags/total_tracks*100:.1f}%)")
+        if tags_from_track > 0:
+            console.print(f"  • From track tags: [bold]{tags_from_track}[/bold]")
+        if tags_from_artist > 0:
+            console.print(f"  • From artist tags (fallback): [bold]{tags_from_artist}[/bold]")
         console.print(f"Tracks attempted: [bold]{tracks_attempted}[/bold] ({tracks_attempted/total_tracks*100:.1f}%)")
         console.print(f"Average appearances per track: [bold]{avg_appearances:.1f}[/bold]")
         console.print(f"Most appearances: [bold]{max_appearances}[/bold] episodes")

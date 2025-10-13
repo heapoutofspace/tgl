@@ -7,6 +7,7 @@ from .search import SearchIndex
 from .fetcher import PatreonPodcastFetcher
 from .spotify import SpotifyManager, SpotifyState, SpotifyTrackCache, SpotifyPlaylist
 from .transcribe import TranscriptionCache, transcribe_audio, format_timestamp
+from .analysis import TrackAnalyzer, TrackAnalysis, TracksDatabase
 
 __version__ = "0.1.0"
 
@@ -27,6 +28,9 @@ __all__ = [
     "TranscriptionCache",
     "transcribe_audio",
     "format_timestamp",
+    "TrackAnalyzer",
+    "TrackAnalysis",
+    "TracksDatabase",
     "paths",
     "TGLPaths",
 ]

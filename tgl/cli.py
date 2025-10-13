@@ -2862,6 +2862,66 @@ def _recalculate_episode_ids(episodes: list):
             # Don't override full_title - keep original RSS title
 
 
+@app.command()
+def analyse():
+    """Analyze tracks across episodes and gather Spotify audio features
+
+    This command:
+    - Maps tracks to the episodes they appear in
+    - Fetches Spotify audio features for all tracks
+    - Stores results in tracks.json
+
+    The analysis reuses the track cache from spotify.json to avoid
+    redundant API calls.
+    """
+    from .analysis import TrackAnalyzer
+    from .spotify import SpotifyManager
+
+    console.print("\n[bold cyan]═══ Track Analysis ═══[/bold cyan]")
+
+    # Load episode cache
+    cache = MetadataCache()
+    if cache.should_auto_refresh():
+        from .fetcher import PatreonPodcastFetcher
+        fetcher = PatreonPodcastFetcher(settings.patreon_rss_url)
+        cache.refresh(fetcher)
+
+    if not cache.episodes:
+        console.print("[red]Error: Could not load episodes[/red]")
+        raise typer.Exit(1)
+
+    all_episodes = cache.get_all_episodes()
+
+    # Initialize analyzer
+    analyzer = TrackAnalyzer()
+
+    # Build track-to-episode mapping
+    analyzer.build_episode_mapping(all_episodes)
+
+    # Check if Spotify credentials are configured
+    if not settings.spotify_client_id or not settings.spotify_client_secret:
+        console.print("\n[yellow]⚠ Spotify credentials not configured - skipping audio features analysis[/yellow]")
+        console.print("[dim]To analyze audio features, configure Spotify credentials with:[/dim]")
+        console.print("[dim]  [cyan]tgl config init[/cyan][/dim]\n")
+        analyzer.print_summary()
+        raise typer.Exit(0)
+
+    # Initialize Spotify manager (reuse track cache)
+    spotify_manager = SpotifyManager(settings, dry_run=False, verbose=False)
+
+    # Analyze Spotify audio features
+    analyzer.analyze_spotify_features(spotify_manager)
+
+    # Print summary
+    analyzer.print_summary()
+
+
+@app.command(name="analyze", hidden=True)
+def analyze_alias():
+    """Alias for analyse command (American spelling)"""
+    analyse()
+
+
 def main():
     """Main CLI entry point"""
     app()

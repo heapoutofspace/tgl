@@ -77,8 +77,45 @@ class OverallProgressPanel(Static):
     current_episode = reactive(None)
     current_transcription_progress = reactive(0.0)
 
-    def render(self) -> Text:
-        """Render the overall progress"""
+    def compose(self) -> ComposeResult:
+        """Compose the panel with progress bar"""
+        yield Static(id="overall-text")
+        yield ProgressBar(id="transcription-progress-bar", show_eta=False)
+
+    def on_mount(self) -> None:
+        """Initialize the progress bar as hidden"""
+        progress_bar = self.query_one("#transcription-progress-bar", ProgressBar)
+        progress_bar.display = False
+
+    def watch_current_episode(self, episode_id: Optional[str]) -> None:
+        """Show/hide progress bar when episode changes"""
+        progress_bar = self.query_one("#transcription-progress-bar", ProgressBar)
+        if episode_id:
+            progress_bar.display = True
+        else:
+            progress_bar.display = False
+        self._update_display()
+
+    def watch_current_transcription_progress(self, progress: float) -> None:
+        """Update progress bar when progress changes"""
+        progress_bar = self.query_one("#transcription-progress-bar", ProgressBar)
+        progress_bar.update(total=100, progress=progress)
+        self._update_display()
+
+    def watch_total_episodes(self, total: int) -> None:
+        """Update display when total changes"""
+        self._update_display()
+
+    def watch_completed_episodes(self, completed: int) -> None:
+        """Update display when completed changes"""
+        self._update_display()
+
+    def watch_failed_episodes(self, failed: int) -> None:
+        """Update display when failed changes"""
+        self._update_display()
+
+    def _update_display(self) -> None:
+        """Update the text display"""
         progress_pct = (
             (self.completed_episodes / self.total_episodes * 100)
             if self.total_episodes > 0 else 0
@@ -97,11 +134,11 @@ class OverallProgressPanel(Static):
         # Show current transcription if active
         if self.current_episode:
             text.append("\n")
-            text.append(f"Currently Transcribing:\n", style="bold magenta")
+            text.append(f"Currently Transcribing: ", style="bold magenta")
             text.append(f"{self.current_episode}\n", style="magenta")
-            text.append(f"Progress: {self.current_transcription_progress:.1f}%\n", style="magenta")
 
-        return text
+        text_widget = self.query_one("#overall-text", Static)
+        text_widget.update(text)
 
 
 class EpisodeListPanel(Static):
@@ -111,10 +148,10 @@ class EpisodeListPanel(Static):
     
     def render(self) -> Table:
         """Render the episode list"""
-        table = Table(title="Episodes", show_header=True, header_style="bold cyan")
-        table.add_column("ID", style="cyan", width=8)
-        table.add_column("Title", style="white", width=30)
-        table.add_column("Status", width=15)
+        table = Table(title="Episodes", show_header=True, header_style="bold cyan", expand=True)
+        table.add_column("ID", style="cyan", width=6, no_wrap=True)
+        table.add_column("Title", style="white", ratio=1)
+        table.add_column("Status", width=20, no_wrap=True)
         
         for guid, status in self.episodes_status.items():
             ep = status.episode
@@ -203,9 +240,9 @@ class TranscriptionApp(App):
     CSS = """
     Screen {
         layout: grid;
-        grid-size: 2 3;
+        grid-size: 2 4;
         grid-columns: 2fr 1fr;
-        grid-rows: auto 1fr auto;
+        grid-rows: auto 1fr 1fr auto;
     }
 
     #overall-progress {
@@ -216,17 +253,19 @@ class TranscriptionApp(App):
     }
 
     #transcription-panel {
-        row-span: 2;
+        row-span: 3;
         border: solid magenta;
         padding: 1;
     }
 
     #episode-list {
+        row-span: 2;
         border: solid green;
         padding: 1;
     }
 
     #download-panel {
+        height: auto;
         border: solid yellow;
         padding: 1;
     }

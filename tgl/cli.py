@@ -485,6 +485,14 @@ def get(
         manual_indicator = " [yellow]⚠[/yellow]" if is_manual else ""
         console.print(f"[cyan]Tracks:{manual_indicator}[/cyan] {len(episode.tracklist)}")
 
+        # Show tracklist
+        console.print(f"\n[bold cyan]Tracklist:[/bold cyan]")
+        for i, track in enumerate(episode.tracklist, 1):
+            track_text = f"{track.artist} - {track.title}"
+            if track.variant:
+                track_text += f" [dim]({track.variant})[/dim]"
+            console.print(f"  {i:2d}. {track_text}")
+
     # Show manual overrides if any
     if episode.manual_overrides:
         console.print(f"\n[yellow]Manually overridden fields:[/yellow] {', '.join(sorted(episode.manual_overrides))}")

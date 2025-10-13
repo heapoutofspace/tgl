@@ -2898,18 +2898,15 @@ def analyse(
 
     # Filter episodes if episode_id is provided
     if episode_id:
-        try:
-            ep_numeric_id = parse_episode_id(episode_id)
-            filtered_episode = cache.get_episode(ep_numeric_id)
-            if not filtered_episode:
-                console.print(f"[red]Error: Episode {episode_id} not found[/red]")
-                raise typer.Exit(1)
+        # Find the episode by ID or GUID (same as get command)
+        filtered_episode, _ = find_episode_by_id_or_guid(all_episodes, episode_id)
 
-            console.print(f"[dim]Filtering to tracks from episode {filtered_episode.episode_id}: {filtered_episode.title}[/dim]")
-            episodes_to_analyze = [filtered_episode]
-        except ValueError as e:
-            console.print(f"[red]Error: {e}[/red]")
+        if not filtered_episode:
+            console.print(f"[red]Error: Episode {episode_id} not found[/red]")
             raise typer.Exit(1)
+
+        console.print(f"[dim]Filtering to tracks from episode {filtered_episode.episode_id}: {filtered_episode.title}[/dim]")
+        episodes_to_analyze = [filtered_episode]
     else:
         episodes_to_analyze = all_episodes
 

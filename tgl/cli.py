@@ -2916,8 +2916,8 @@ def analyse(
     # Initialize analyzer
     analyzer = TrackAnalyzer(settings)
 
-    # Build track-to-episode mapping
-    analyzer.build_episode_mapping(episodes_to_analyze)
+    # Build track-to-episode mapping and get list of track keys to analyze
+    track_keys = analyzer.build_episode_mapping(episodes_to_analyze)
 
     # Check if Last.fm API key is configured
     if not settings.lastfm_api_key:
@@ -2928,8 +2928,8 @@ def analyse(
         analyzer.print_summary()
         raise typer.Exit(0)
 
-    # Fetch Last.fm tags
-    analyzer.fetch_lastfm_tags()
+    # Fetch Last.fm tags (only for tracks from the filtered episodes)
+    analyzer.fetch_lastfm_tags(track_keys_filter=track_keys)
 
     # Print summary
     analyzer.print_summary()

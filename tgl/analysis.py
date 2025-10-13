@@ -97,16 +97,20 @@ class TrackAnalyzer:
         """
         return f"{artist.lower()}|{title.lower()}"
 
-    def build_episode_mapping(self, episodes: List[Episode]):
+    def build_episode_mapping(self, episodes: List[Episode]) -> List[str]:
         """Build mapping of tracks to episodes they appear in
 
         Args:
             episodes: List of all episodes
+
+        Returns:
+            List of track keys that were added/updated in this run
         """
         console.print("\n[cyan]Building track-to-episode mapping...[/cyan]")
 
         track_count = 0
         episode_count = 0
+        updated_track_keys = []
 
         for ep in episodes:
             if not ep.tracklist:
@@ -125,14 +129,21 @@ class TrackAnalyzer:
                 # Add episode to track's appearances
                 self.db.tracks[track_key].add_episode(ep.guid)
 
-        console.print(f"[green]✓[/green] Found {len(self.db.tracks)} unique tracks across {episode_count} episodes")
+                # Track this key as updated in this run
+                if track_key not in updated_track_keys:
+                    updated_track_keys.append(track_key)
+
+        console.print(f"[green]✓[/green] Found {len(updated_track_keys)} unique tracks across {episode_count} episodes")
         self._save_db()
 
-    def fetch_lastfm_tags(self, spotify_manager=None):
-        """Fetch Last.fm tags for all tracks
+        return updated_track_keys
+
+    def fetch_lastfm_tags(self, track_keys_filter: Optional[List[str]] = None):
+        """Fetch Last.fm tags for tracks
 
         Args:
-            spotify_manager: Optional SpotifyManager instance with track cache (for artist/title lookup)
+            track_keys_filter: Optional list of track keys to fetch tags for.
+                              If None, fetches tags for all tracks in database.
         """
         console.print("\n[cyan]Fetching Last.fm tags...[/cyan]")
 
@@ -144,7 +155,16 @@ class TrackAnalyzer:
         # Get tracks that need analysis
         tracks_to_analyze = []
 
-        for track_key, track_data in self.db.tracks.items():
+        # Determine which tracks to process
+        tracks_to_check = track_keys_filter if track_keys_filter else list(self.db.tracks.keys())
+
+        for track_key in tracks_to_check:
+            # Skip if track doesn't exist in database
+            if track_key not in self.db.tracks:
+                continue
+
+            track_data = self.db.tracks[track_key]
+
             # Skip if we already have Last.fm tags (cache hit)
             if track_data.lastfm_tags is not None:
                 continue

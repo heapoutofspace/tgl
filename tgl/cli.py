@@ -1468,6 +1468,9 @@ def transcribe(
             def on_progress(pct: float):
                 results_queue.put(TranscriptionMessage.progress(guid, pct))
 
+            def on_vad_complete():
+                results_queue.put(TranscriptionMessage.vad_complete(guid))
+
             def on_shutdown_check() -> bool:
                 return shutdown_event.is_set()
 
@@ -1480,7 +1483,8 @@ def transcribe(
                     segment_callback=on_segment,
                     progress_callback=on_progress,
                     shutdown_callback=on_shutdown_check,
-                    batch_size=batch_size
+                    batch_size=batch_size,
+                    vad_complete_callback=on_vad_complete
                 )
 
                 # Send completion message with segments (only simple Python objects!)

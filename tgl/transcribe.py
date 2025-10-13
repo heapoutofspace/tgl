@@ -189,7 +189,8 @@ def transcribe_audio(
     segment_callback: Optional[Callable[[str], None]] = None,
     progress_callback: Optional[Callable[[float], None]] = None,
     shutdown_callback: Optional[Callable[[], bool]] = None,
-    batch_size: Optional[int] = None
+    batch_size: Optional[int] = None,
+    vad_complete_callback: Optional[Callable[[], None]] = None
 ) -> tuple[str, list]:
     """Transcribe an audio file using faster-whisper
 
@@ -201,6 +202,7 @@ def transcribe_audio(
         progress_callback: Optional callback(progress_pct) called with progress percentage
         shutdown_callback: Optional callback() -> bool that returns True if shutdown requested
         batch_size: Optional batch size for BatchedInferencePipeline (faster processing)
+        vad_complete_callback: Optional callback() called when VAD completes (before first segment)
 
     Returns:
         Tuple of (full_text, segments) where segments is a list of dicts with start, end, text keys
@@ -279,6 +281,7 @@ def transcribe_audio(
         text_parts = []
         segment_data = []
         segment_count = 0
+        vad_complete_signaled = False
 
         # Get audio duration for progress calculation
         audio_duration = info.duration if hasattr(info, 'duration') else None
@@ -287,6 +290,11 @@ def transcribe_audio(
             # Check for shutdown before processing each segment
             if shutdown_callback and shutdown_callback():
                 raise RuntimeError("Transcription aborted due to shutdown")
+
+            # Signal VAD completion on first segment (VAD is done when we start getting segments)
+            if not vad_complete_signaled and vad_complete_callback:
+                vad_complete_callback()
+                vad_complete_signaled = True
 
             segment_text = segment.text.strip()
             text_parts.append(segment.text)

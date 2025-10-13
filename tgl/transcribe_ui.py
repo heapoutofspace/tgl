@@ -11,7 +11,7 @@ from queue import Queue, Empty
 
 from textual.app import App, ComposeResult
 from textual.containers import Container, Vertical, Horizontal, ScrollableContainer
-from textual.widgets import Header, Footer, Static, ProgressBar, Label
+from textual.widgets import Header, Footer, Static, ProgressBar, Label, LoadingIndicator
 from textual.reactive import reactive
 from rich.text import Text
 from rich.table import Table
@@ -33,6 +33,11 @@ class TranscriptionMessage:
     def segment(guid: str, text: str) -> Dict[str, Any]:
         """New transcription segment message"""
         return {"type": "segment", "guid": guid, "text": text}
+
+    @staticmethod
+    def vad_complete(guid: str) -> Dict[str, Any]:
+        """VAD filter complete, starting transcription message"""
+        return {"type": "vad_complete", "guid": guid}
 
     @staticmethod
     def complete(guid: str, text: str, segments: Optional[list] = None) -> Dict[str, Any]:
@@ -76,24 +81,44 @@ class OverallProgressPanel(Static):
     failed_episodes = reactive(0)
     current_episode = reactive(None)
     current_transcription_progress = reactive(0.0)
+    transcription_state = reactive(None)  # None, "vad", or "transcribing"
 
     def compose(self) -> ComposeResult:
-        """Compose the panel with progress bar"""
+        """Compose the panel with progress indicators"""
         yield Static(id="overall-text")
-        yield ProgressBar(id="transcription-progress-bar", show_eta=False)
+        yield Container(
+            LoadingIndicator(id="vad-spinner"),
+            ProgressBar(id="transcription-progress-bar", show_eta=False),
+            id="progress-container"
+        )
 
     def on_mount(self) -> None:
-        """Initialize the progress bar as hidden"""
-        progress_bar = self.query_one("#transcription-progress-bar", ProgressBar)
-        progress_bar.display = False
+        """Initialize the progress indicators as hidden"""
+        self.query_one("#vad-spinner", LoadingIndicator).display = False
+        self.query_one("#transcription-progress-bar", ProgressBar).display = False
 
-    def watch_current_episode(self, episode_id: Optional[str]) -> None:
-        """Show/hide progress bar when episode changes"""
+    def watch_transcription_state(self, state: Optional[str]) -> None:
+        """Show appropriate indicator based on transcription state"""
+        spinner = self.query_one("#vad-spinner", LoadingIndicator)
         progress_bar = self.query_one("#transcription-progress-bar", ProgressBar)
-        if episode_id:
+
+        if state == "vad":
+            # Show spinner, hide progress bar
+            spinner.display = True
+            progress_bar.display = False
+        elif state == "transcribing":
+            # Hide spinner, show progress bar
+            spinner.display = False
             progress_bar.display = True
         else:
+            # Hide both
+            spinner.display = False
             progress_bar.display = False
+
+        self._update_display()
+
+    def watch_current_episode(self, episode_id: Optional[str]) -> None:
+        """Update display when episode changes"""
         self._update_display()
 
     def watch_current_transcription_progress(self, progress: float) -> None:
@@ -136,6 +161,10 @@ class OverallProgressPanel(Static):
             text.append("\n")
             text.append(f"Currently Transcribing: ", style="bold magenta")
             text.append(f"{self.current_episode}\n", style="magenta")
+
+            # Show state-specific message
+            if self.transcription_state == "vad":
+                text.append("Running VAD filter...\n", style="yellow")
 
         text_widget = self.query_one("#overall-text", Static)
         text_widget.update(text)
@@ -366,6 +395,7 @@ class TranscriptionApp(App):
                 if overall.current_episode == status.episode.episode_id:
                     overall.current_episode = None
                     overall.current_transcription_progress = 0.0
+                    overall.transcription_state = None
 
             overall.refresh()
 
@@ -395,6 +425,7 @@ class TranscriptionApp(App):
             overall = self.query_one("#overall-progress", OverallProgressPanel)
             overall.current_episode = status.episode.episode_id
             overall.current_transcription_progress = 0.0
+            overall.transcription_state = "vad"  # Start in VAD phase
             overall.refresh()
 
             # Clear segments when starting new episode
@@ -462,6 +493,12 @@ class TranscriptionApp(App):
                 EpisodeState.TRANSCRIBING,
                 transcription_progress=progress
             )
+
+        elif msg_type == "vad_complete":
+            # VAD filter complete, switch to transcribing state
+            overall = self.query_one("#overall-progress", OverallProgressPanel)
+            overall.transcription_state = "transcribing"
+            overall.refresh()
 
         elif msg_type == "segment":
             # Add transcription segment

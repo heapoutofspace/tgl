@@ -2,17 +2,19 @@
 
 This module provides analysis capabilities for tracks across episodes:
 - Track appearance tracking (which episodes contain each track)
-- Spotify audio features analysis
+- Last.fm tags analysis
 - Extensible for future data sources
 """
 
 import json
+import time
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 from rich.console import Console
 from pydantic import BaseModel, Field
+import requests
 
-from .config import paths
+from .config import paths, Settings
 from .models import Episode
 
 console = Console()
@@ -21,7 +23,7 @@ console = Console()
 class TrackAnalysis(BaseModel):
     """Analysis data for a single track"""
     episodes: List[str] = Field(default_factory=list, description="Episode GUIDs this track appears in")
-    spotify_analysis: Optional[Dict[str, Any]] = Field(default=None, description="Spotify audio features")
+    lastfm_tags: Optional[List[Dict[str, Any]]] = Field(default=None, description="Last.fm track tags")
 
     def add_episode(self, guid: str):
         """Add an episode GUID if not already present"""
@@ -52,8 +54,13 @@ class TracksDatabase(BaseModel):
 class TrackAnalyzer:
     """Manages track analysis across episodes"""
 
-    def __init__(self):
-        """Initialize track analyzer"""
+    def __init__(self, settings: Settings):
+        """Initialize track analyzer
+
+        Args:
+            settings: Application settings with API credentials
+        """
+        self.settings = settings
         self.db_file = paths.data_dir / "tracks.json"
         self.db = self._load_db()
 
@@ -121,78 +128,108 @@ class TrackAnalyzer:
         console.print(f"[green]✓[/green] Found {len(self.db.tracks)} unique tracks across {episode_count} episodes")
         self._save_db()
 
-    def analyze_spotify_features(self, spotify_manager):
-        """Fetch Spotify audio features for all tracks
+    def fetch_lastfm_tags(self, spotify_manager=None):
+        """Fetch Last.fm tags for all tracks
 
         Args:
-            spotify_manager: SpotifyManager instance with track cache
+            spotify_manager: Optional SpotifyManager instance with track cache (for artist/title lookup)
         """
-        console.print("\n[cyan]Analyzing Spotify audio features...[/cyan]")
+        console.print("\n[cyan]Fetching Last.fm tags...[/cyan]")
+
+        if not self.settings.lastfm_api_key:
+            console.print("[red]Error: Last.fm API key not configured[/red]")
+            console.print("[dim]Set LASTFM_API_KEY in your .env file or config.toml[/dim]")
+            return
 
         # Get tracks that need analysis
         tracks_to_analyze = []
 
         for track_key, track_data in self.db.tracks.items():
-            # Skip if we already have analysis
-            if track_data.spotify_analysis:
+            # Skip if we already have Last.fm tags (cache hit)
+            if track_data.lastfm_tags is not None:
                 continue
 
-            # Check if we have a Spotify ID in the cache
-            if track_key in spotify_manager.state.tracks:
-                cached_track = spotify_manager.state.tracks[track_key]
-                if cached_track.id:
-                    tracks_to_analyze.append((track_key, cached_track.id))
+            # Parse artist and title from track key
+            parts = track_key.split('|', 1)
+            if len(parts) == 2:
+                artist, title = parts
+                tracks_to_analyze.append((track_key, artist, title))
 
         if not tracks_to_analyze:
-            console.print(f"[yellow]No tracks need Spotify analysis[/yellow]")
+            console.print(f"[yellow]All tracks already have Last.fm tags[/yellow]")
             return
 
-        console.print(f"[dim]Tracks to analyze: {len(tracks_to_analyze)}[/dim]")
+        console.print(f"[dim]Tracks to fetch: {len(tracks_to_analyze)}[/dim]")
 
-        # Fetch audio features in batches of 100 (Spotify API limit)
-        batch_size = 100
         analyzed_count = 0
         failed_count = 0
+        rate_limit_delay = 0.25  # 250ms between requests (4 requests/sec, well below Last.fm's 5/sec limit)
 
-        try:
-            client = spotify_manager._get_user_client()
+        for i, (track_key, artist, title) in enumerate(tracks_to_analyze, 1):
+            try:
+                console.print(f"  [{i}/{len(tracks_to_analyze)}] [cyan]Fetching:[/cyan] {artist} - {title}")
 
-            for i in range(0, len(tracks_to_analyze), batch_size):
-                batch = tracks_to_analyze[i:i + batch_size]
-                track_ids = [tid for _, tid in batch]
+                # Call Last.fm API
+                url = "http://ws.audioscrobbler.com/2.0/"
+                params = {
+                    'method': 'track.getTopTags',
+                    'artist': artist,
+                    'track': title,
+                    'api_key': self.settings.lastfm_api_key,
+                    'format': 'json'
+                }
 
-                console.print(f"[cyan]Fetching features for batch {i//batch_size + 1} ({len(track_ids)} tracks)...[/cyan]")
+                response = requests.get(url, params=params, timeout=10)
+                response.raise_for_status()
 
-                try:
-                    # Fetch audio features
-                    spotify_manager._log_api_call("AUDIO_FEATURES", f"{len(track_ids)} tracks")
-                    features_list = client.audio_features(track_ids)
+                data = response.json()
 
-                    # Store features for each track
-                    for (track_key, track_id), features in zip(batch, features_list):
-                        if features:
-                            # Store the features (remove the track URI to save space)
-                            features_clean = {k: v for k, v in features.items() if k not in ['uri', 'track_href', 'analysis_url']}
-                            self.db.tracks[track_key].spotify_analysis = features_clean
-                            analyzed_count += 1
-                        else:
-                            # Track exists but has no audio features (rare)
-                            failed_count += 1
+                # Extract tags from response
+                tags = []
+                if 'toptags' in data and 'tag' in data['toptags']:
+                    tag_list = data['toptags']['tag']
+                    # Ensure tag_list is a list (single tag returns dict)
+                    if isinstance(tag_list, dict):
+                        tag_list = [tag_list]
 
-                    console.print(f"[green]✓[/green] Analyzed {len([f for f in features_list if f])} tracks")
+                    for tag in tag_list:
+                        tags.append({
+                            'name': tag.get('name', ''),
+                            'count': int(tag.get('count', 0))
+                        })
 
-                    # Save after each batch to avoid losing progress
+                # Store tags (empty list if no tags found)
+                self.db.tracks[track_key].lastfm_tags = tags
+                analyzed_count += 1
+
+                if tags:
+                    tag_names = ', '.join([t['name'] for t in tags[:5]])
+                    console.print(f"    [green]✓[/green] Found {len(tags)} tags: [dim]{tag_names}{'...' if len(tags) > 5 else ''}[/dim]")
+                else:
+                    console.print(f"    [yellow]⚠[/yellow] No tags found")
+
+                # Save after every 10 tracks to avoid losing progress
+                if analyzed_count % 10 == 0:
                     self._save_db()
 
-                except Exception as e:
-                    console.print(f"[red]Error fetching features for batch: {e}[/red]")
-                    failed_count += len(batch)
+                # Rate limiting
+                time.sleep(rate_limit_delay)
 
-        except Exception as e:
-            console.print(f"[red]Error initializing Spotify client: {e}[/red]")
-            return
+            except requests.exceptions.RequestException as e:
+                console.print(f"    [red]✗[/red] API error: {e}")
+                # Store empty list to mark as attempted (cache the failure)
+                self.db.tracks[track_key].lastfm_tags = []
+                failed_count += 1
+            except Exception as e:
+                console.print(f"    [red]✗[/red] Error: {e}")
+                # Store empty list to mark as attempted
+                self.db.tracks[track_key].lastfm_tags = []
+                failed_count += 1
 
-        console.print(f"\n[green]✓[/green] Analyzed {analyzed_count} tracks")
+        # Final save
+        self._save_db()
+
+        console.print(f"\n[green]✓[/green] Fetched tags for {analyzed_count} tracks")
         if failed_count:
             console.print(f"[yellow]⚠[/yellow] {failed_count} tracks could not be analyzed")
 
@@ -201,7 +238,8 @@ class TrackAnalyzer:
         console.print("\n[bold cyan]Track Analysis Summary[/bold cyan]\n")
 
         total_tracks = len(self.db.tracks)
-        tracks_with_analysis = sum(1 for t in self.db.tracks.values() if t.spotify_analysis)
+        tracks_with_tags = sum(1 for t in self.db.tracks.values() if t.lastfm_tags is not None and len(t.lastfm_tags) > 0)
+        tracks_attempted = sum(1 for t in self.db.tracks.values() if t.lastfm_tags is not None)
 
         # Calculate appearance statistics
         appearances = [len(t.episodes) for t in self.db.tracks.values()]
@@ -209,7 +247,8 @@ class TrackAnalyzer:
         avg_appearances = sum(appearances) / len(appearances) if appearances else 0
 
         console.print(f"Total unique tracks: [bold]{total_tracks}[/bold]")
-        console.print(f"Tracks with Spotify analysis: [bold]{tracks_with_analysis}[/bold] ({tracks_with_analysis/total_tracks*100:.1f}%)")
+        console.print(f"Tracks with Last.fm tags: [bold]{tracks_with_tags}[/bold] ({tracks_with_tags/total_tracks*100:.1f}%)")
+        console.print(f"Tracks attempted: [bold]{tracks_attempted}[/bold] ({tracks_attempted/total_tracks*100:.1f}%)")
         console.print(f"Average appearances per track: [bold]{avg_appearances:.1f}[/bold]")
         console.print(f"Most appearances: [bold]{max_appearances}[/bold] episodes")
 

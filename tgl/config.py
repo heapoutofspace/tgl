@@ -234,6 +234,13 @@ class Settings(BaseSettings):
         description="Format for year playlist descriptions ({year} is replaced)"
     )
 
+    # Last.fm API credentials (optional - only needed for analyse command)
+    lastfm_api_key: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices('TGL_LASTFM_API_KEY', 'LASTFM_API_KEY'),
+        description="Last.fm API key for track analysis"
+    )
+
     spotify_all_playlist_format: str = Field(
         default='The Sound of The Guestlist by Fear of Tigers',
         validation_alias=AliasChoices('TGL_SPOTIFY_ALL_PLAYLIST_FORMAT', 'SPOTIFY_ALL_PLAYLIST_FORMAT'),

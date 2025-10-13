@@ -2863,19 +2863,23 @@ def _recalculate_episode_ids(episodes: list):
 
 
 @app.command()
-def analyse():
-    """Analyze tracks across episodes and gather Spotify audio features
+def analyse(
+    episode_id: Optional[str] = typer.Argument(None, help="Optional episode ID to analyze tracks from (e.g., E390, B01)")
+):
+    """Analyze tracks across episodes and gather Last.fm tags
 
     This command:
     - Maps tracks to the episodes they appear in
-    - Fetches Spotify audio features for all tracks
-    - Stores results in tracks.json
+    - Fetches Last.fm tags for all tracks
+    - Stores results in tracks.json (acts as a cache)
 
-    The analysis reuses the track cache from spotify.json to avoid
-    redundant API calls.
+    Pass an episode ID to only analyze tracks from that specific episode (useful for testing).
+
+    Examples:
+      tgl analyse           # Analyze all tracks
+      tgl analyse E390      # Only analyze tracks from episode E390
     """
     from .analysis import TrackAnalyzer
-    from .spotify import SpotifyManager
 
     console.print("\n[bold cyan]═══ Track Analysis ═══[/bold cyan]")
 
@@ -2892,34 +2896,51 @@ def analyse():
 
     all_episodes = cache.get_all_episodes()
 
+    # Filter episodes if episode_id is provided
+    if episode_id:
+        try:
+            ep_numeric_id = parse_episode_id(episode_id)
+            filtered_episode = cache.get_episode(ep_numeric_id)
+            if not filtered_episode:
+                console.print(f"[red]Error: Episode {episode_id} not found[/red]")
+                raise typer.Exit(1)
+
+            console.print(f"[dim]Filtering to tracks from episode {filtered_episode.episode_id}: {filtered_episode.title}[/dim]")
+            episodes_to_analyze = [filtered_episode]
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            raise typer.Exit(1)
+    else:
+        episodes_to_analyze = all_episodes
+
     # Initialize analyzer
-    analyzer = TrackAnalyzer()
+    analyzer = TrackAnalyzer(settings)
 
     # Build track-to-episode mapping
-    analyzer.build_episode_mapping(all_episodes)
+    analyzer.build_episode_mapping(episodes_to_analyze)
 
-    # Check if Spotify credentials are configured
-    if not settings.spotify_client_id or not settings.spotify_client_secret:
-        console.print("\n[yellow]⚠ Spotify credentials not configured - skipping audio features analysis[/yellow]")
-        console.print("[dim]To analyze audio features, configure Spotify credentials with:[/dim]")
-        console.print("[dim]  [cyan]tgl config init[/cyan][/dim]\n")
+    # Check if Last.fm API key is configured
+    if not settings.lastfm_api_key:
+        console.print("\n[yellow]⚠ Last.fm API key not configured - skipping tags analysis[/yellow]")
+        console.print("[dim]To analyze track tags, configure Last.fm API key with:[/dim]")
+        console.print("[dim]  [cyan]tgl config set lastfm_api_key YOUR_KEY[/cyan][/dim]")
+        console.print("[dim]Get your API key at: https://www.last.fm/api/account/create[/dim]\n")
         analyzer.print_summary()
         raise typer.Exit(0)
 
-    # Initialize Spotify manager (reuse track cache)
-    spotify_manager = SpotifyManager(settings, dry_run=False, verbose=False)
-
-    # Analyze Spotify audio features
-    analyzer.analyze_spotify_features(spotify_manager)
+    # Fetch Last.fm tags
+    analyzer.fetch_lastfm_tags()
 
     # Print summary
     analyzer.print_summary()
 
 
 @app.command(name="analyze", hidden=True)
-def analyze_alias():
+def analyze_alias(
+    episode_id: Optional[str] = typer.Argument(None, help="Optional episode ID to analyze tracks from (e.g., E390, B01)")
+):
     """Alias for analyse command (American spelling)"""
-    analyse()
+    analyse(episode_id)
 
 
 def main():

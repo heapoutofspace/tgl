@@ -31,8 +31,8 @@ def format_timestamp(seconds: float) -> str:
 
 
 # Set environment variables to avoid multiprocessing issues in threads
-os.environ['OMP_NUM_THREADS'] = '1'
-os.environ['MKL_NUM_THREADS'] = '1'
+# os.environ['OMP_NUM_THREADS'] = '1'
+# os.environ['MKL_NUM_THREADS'] = '1'
 
 # Configure multiprocessing for faster-whisper
 # Must be set before importing torch or faster_whisper
@@ -188,7 +188,8 @@ def transcribe_audio(
     language: str = "en",
     segment_callback: Optional[Callable[[str], None]] = None,
     progress_callback: Optional[Callable[[float], None]] = None,
-    shutdown_callback: Optional[Callable[[], bool]] = None
+    shutdown_callback: Optional[Callable[[], bool]] = None,
+    batch_size: Optional[int] = None
 ) -> tuple[str, list]:
     """Transcribe an audio file using faster-whisper
 
@@ -199,6 +200,7 @@ def transcribe_audio(
         segment_callback: Optional callback(segment_text) called for each segment
         progress_callback: Optional callback(progress_pct) called with progress percentage
         shutdown_callback: Optional callback() -> bool that returns True if shutdown requested
+        batch_size: Optional batch size for BatchedInferencePipeline (faster processing)
 
     Returns:
         Tuple of (full_text, segments) where segments is a list of dicts with start, end, text keys
@@ -208,6 +210,8 @@ def transcribe_audio(
     """
     try:
         from faster_whisper import WhisperModel
+        if batch_size:
+            from faster_whisper import BatchedInferencePipeline
     except ImportError as e:
         raise RuntimeError(f"faster-whisper not installed: {e}. Please install faster-whisper>=1.0.0")
 
@@ -238,15 +242,22 @@ def transcribe_audio(
         # Initialize the model
         # Note: faster-whisper downloads models to cache automatically
         # Multiprocessing is configured at module import to use 'fork' method
-        model = WhisperModel(
+        base_model = WhisperModel(
             model_size,
             device=device,
             compute_type=compute_type,
             download_root=None,  # Use default cache location
         )
 
-        if not segment_callback:
-            console.print(f"[dim]Model: {model_size}, Language: {language}, Device: {device}, Compute: {compute_type}[/dim]")
+        # Use BatchedInferencePipeline for faster processing if batch_size is specified
+        if batch_size:
+            model = BatchedInferencePipeline(model=base_model, batch_size=batch_size)
+            if not segment_callback:
+                console.print(f"[dim]Model: {model_size}, Language: {language}, Device: {device}, Compute: {compute_type}, Batch: {batch_size}[/dim]")
+        else:
+            model = base_model
+            if not segment_callback:
+                console.print(f"[dim]Model: {model_size}, Language: {language}, Device: {device}, Compute: {compute_type}[/dim]")
 
         # Transcribe the audio
         # beam_size=5 is a good balance between speed and accuracy
@@ -254,9 +265,9 @@ def transcribe_audio(
         segments, info = model.transcribe(
             str(audio_path),
             language=language,
-            beam_size=5,
+            # beam_size=5,
             vad_filter=True,
-            vad_parameters=dict(min_silence_duration_ms=500),
+            # vad_parameters=dict(min_silence_duration_ms=500),
         )
 
         # Collect all segment texts and timestamps with callbacks

@@ -1077,7 +1077,7 @@ def download(
     console.print(f"\n[dim]Files saved to: {paths.episodes_dir}[/dim]")
 
 
-def _transcribe_no_ui(episodes: List, transcription_cache, cache, model_size: str = "large-v3"):
+def _transcribe_no_ui(episodes: List, transcription_cache, cache, model_size: str = "large-v3", batch_size: Optional[int] = None):
     """Transcribe episodes without TUI (for debugging)"""
     import httpx
 
@@ -1140,7 +1140,7 @@ def _transcribe_no_ui(episodes: List, transcription_cache, cache, model_size: st
                     # Use plain print with \r for carriage return (Rich doesn't handle this well)
                     print(f"\rTranscription progress: {pct:.1f}%", end="", flush=True)
 
-            transcription_text, segments = transcribe_audio(audio_path, model_size=model_size, progress_callback=on_progress)
+            transcription_text, segments = transcribe_audio(audio_path, model_size=model_size, progress_callback=on_progress, batch_size=batch_size)
             print()  # New line after progress
 
             # Save transcription with timestamps
@@ -1185,7 +1185,8 @@ def transcribe(
     all_episodes: bool = typer.Option(False, "--all", help="Transcribe all episodes"),
     force: bool = typer.Option(False, "--force", "-f", help="Re-transcribe even if transcription exists"),
     no_ui: bool = typer.Option(False, "--no-ui", help="Disable TUI, show progress bars instead (for debugging)"),
-    model: str = typer.Option("large-v3", "--model", "-m", help="Whisper model (turbo, large-v3, large-v2, medium, small, base, tiny)")
+    model: str = typer.Option("large-v3", "--model", "-m", help="Whisper model (turbo, large-v3, large-v2, medium, small, base, tiny)"),
+    batch_size: Optional[int] = typer.Option(None, "--batch-size", "-b", help="Batch size for faster processing (recommended: 8-24)")
 ):
     """Transcribe episode audio files using Whisper AI
 
@@ -1208,6 +1209,7 @@ def transcribe(
       tgl transcribe E390 --no-ui      # Debug mode without TUI
       tgl transcribe E390 -m turbo     # Use faster turbo model
       tgl transcribe E390 -m medium    # Use smaller, faster medium model
+      tgl transcribe E390 -b 16        # Use batched processing for speed
     """
     import concurrent.futures
     from queue import Queue
@@ -1274,7 +1276,7 @@ def transcribe(
 
     # Use simple progress bars if --no-ui flag is set
     if no_ui:
-        _transcribe_no_ui(episodes_to_process, transcription_cache, cache, model_size=model)
+        _transcribe_no_ui(episodes_to_process, transcription_cache, cache, model_size=model, batch_size=batch_size)
         return
 
     # Queues for coordinating work
@@ -1477,7 +1479,8 @@ def transcribe(
                     model_size=model,
                     segment_callback=on_segment,
                     progress_callback=on_progress,
-                    shutdown_callback=on_shutdown_check
+                    shutdown_callback=on_shutdown_check,
+                    batch_size=batch_size
                 )
 
                 # Send completion message with segments (only simple Python objects!)

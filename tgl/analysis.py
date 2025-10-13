@@ -196,6 +196,7 @@ class TrackAnalyzer:
                     'artist': artist,
                     'track': title,
                     'api_key': self.settings.lastfm_api_key,
+                    'autocorrect': 1,  # Enable autocorrection for better matching
                     'format': 'json'
                 }
 

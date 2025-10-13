@@ -36,7 +36,7 @@ class SpotifyPlaylist(BaseModel):
     id: str
     name: str
     tracks: List[str] = Field(default_factory=list)
-    cover_version: Optional[int] = None
+    cover_version: Optional[str] = None
 
 
 class SpotifyState(BaseModel):
@@ -124,17 +124,19 @@ class IntegratedCacheHandler(CacheHandler):
 class SpotifyManager:
     """Manages Spotify operations with state persistence and smart caching"""
 
-    def __init__(self, settings: Settings, dry_run: bool = False, verbose: bool = False):
+    def __init__(self, settings: Settings, dry_run: bool = False, verbose: bool = False, force_search_missing: bool = False):
         """Initialize Spotify manager
 
         Args:
             settings: Application settings with Spotify credentials
             dry_run: If True, no write operations are performed on Spotify
             verbose: If True, log all Spotify API calls
+            force_search_missing: If True, ignore cache for missing tracks (re-search them)
         """
         self.settings = settings
         self.dry_run = dry_run
         self.verbose = verbose
+        self.force_search_missing = force_search_missing
         self.state_file = paths.data_dir / "spotify.json"
         self.state = self._load_state()
 
@@ -410,11 +412,12 @@ class SpotifyManager:
 
         return title_match and artist_match
 
-    def search_track(self, track: TrackInfo) -> Optional[Tuple[str, str, List[str]]]:
+    def search_track(self, track: TrackInfo, episode_date: Optional[str] = None) -> Optional[Tuple[str, str, List[str]]]:
         """Search for a track on Spotify with multiple fallback strategies
 
         Args:
             track: TrackInfo object with artist, title, and optional variant
+            episode_date: Optional episode publication date (ISO format) for smarter cache invalidation
 
         Returns:
             Tuple of (track_id, track_name, artist_names) if found, None otherwise
@@ -432,11 +435,26 @@ class SpotifyManager:
                 self._log_api_call("CACHE_HIT", f"{track.artist} - {track.title}")
                 return (cached.id, cached.name, cached.artists)
 
-            # This is a cached miss - check if it's still valid (less than 1 day old)
-            if cached.timestamp:
+            # This is a cached miss - decide if we should re-search
+            # If force_search_missing is True, always search
+            if not self.force_search_missing and cached.timestamp:
                 try:
                     cached_time = datetime.fromisoformat(cached.timestamp)
                     age = datetime.now() - cached_time
+
+                    # For episodes older than 1 year, trust the cached miss (track likely doesn't exist)
+                    if episode_date:
+                        try:
+                            ep_date = datetime.fromisoformat(episode_date)
+                            episode_age = datetime.now() - ep_date
+                            if episode_age > timedelta(days=365):
+                                # Old episode - trust the cached miss
+                                self._log_api_call("CACHE_MISS", f"{track.artist} - {track.title} (old episode, cached)")
+                                return None
+                        except (ValueError, TypeError):
+                            pass  # Invalid episode date, fall through to standard cache logic
+
+                    # For recent episodes, use 1 day cache
                     if age < timedelta(days=1):
                         self._log_api_call("CACHE_MISS", f"{track.artist} - {track.title} (cached)")
                         return None
@@ -620,7 +638,7 @@ class SpotifyManager:
 
         console.print(f"[cyan]Searching for tracks on Spotify...[/cyan]")
         for i, track in enumerate(episode.tracklist, 1):
-            result = self.search_track(track)
+            result = self.search_track(track, episode_date=episode.published)
             if result:
                 track_id, track_name, artists = result
                 found_tracks.append((track_id, track, track_name, artists))
@@ -786,14 +804,16 @@ class SpotifyManager:
         console.print(f"[dim]Episodes: {len(year_episodes)}[/dim]")
 
         # First pass: collect all unique tracks by artist|title (to minimize searches)
-        unique_by_name = {}
+        # Also track the most recent episode date for each track (for smart caching)
+        unique_by_name = {}  # track_key -> (TrackInfo, most_recent_date)
         total_tracks = 0
-        for ep in episodes_sorted:
+        for ep in episodes_sorted:  # Already sorted by date, most recent first
             for track in ep.tracklist:
                 total_tracks += 1
                 track_key = f"{track.artist.lower()}|{track.title.lower()}"
                 if track_key not in unique_by_name:
-                    unique_by_name[track_key] = track
+                    # First occurrence is most recent (episodes_sorted is most recent first)
+                    unique_by_name[track_key] = (track, ep.published)
 
         console.print(f"[dim]Tracks by name: {len(unique_by_name)} (from {total_tracks} total)[/dim]\n")
 
@@ -802,8 +822,8 @@ class SpotifyManager:
         missing_track_keys = set()
 
         console.print(f"[cyan]Searching for tracks on Spotify...[/cyan]")
-        for i, (track_key, track) in enumerate(unique_by_name.items(), 1):
-            result = self.search_track(track)
+        for i, (track_key, (track, episode_date)) in enumerate(unique_by_name.items(), 1):
+            result = self.search_track(track, episode_date=episode_date)
             if result:
                 track_id, track_name, artists = result
                 track_key_to_spotify_id[track_key] = track_id
@@ -838,7 +858,7 @@ class SpotifyManager:
         track_ids = [spotify_id for spotify_id, _, _ in ordered_tracks]
 
         # Build missing tracks list for display
-        missing_tracks = [unique_by_name[tk] for tk in missing_track_keys]
+        missing_tracks = [unique_by_name[tk][0] for tk in missing_track_keys]
 
         if missing_tracks:
             console.print(f"[yellow]⚠[/yellow] {len(missing_tracks)} tracks not found:\\n")
@@ -1008,15 +1028,17 @@ class SpotifyManager:
         console.print(f"[dim]Episodes: {len(episodes_with_tracks)}[/dim]")
 
         # First pass: collect all unique tracks by artist|title (to minimize searches)
-        unique_by_name = {}
+        # Also track the most recent episode date for each track (for smart caching)
+        unique_by_name = {}  # track_key -> (TrackInfo, most_recent_date)
         total_tracks = 0
 
-        for ep in episodes_sorted:
+        for ep in episodes_sorted:  # Already sorted by date, most recent first
             for track in ep.tracklist:
                 total_tracks += 1
                 track_key = f"{track.artist.lower()}|{track.title.lower()}"
                 if track_key not in unique_by_name:
-                    unique_by_name[track_key] = track
+                    # First occurrence is most recent (episodes_sorted is most recent first)
+                    unique_by_name[track_key] = (track, ep.published)
 
         console.print(f"[dim]Tracks by name: {len(unique_by_name)} (from {total_tracks} total)[/dim]\n")
 
@@ -1025,8 +1047,8 @@ class SpotifyManager:
         missing_track_keys = set()
 
         console.print(f"[cyan]Searching for tracks on Spotify...[/cyan]")
-        for i, (track_key, track) in enumerate(unique_by_name.items(), 1):
-            result = self.search_track(track)
+        for i, (track_key, (track, episode_date)) in enumerate(unique_by_name.items(), 1):
+            result = self.search_track(track, episode_date=episode_date)
             if result:
                 track_id, track_name, artists = result
                 track_key_to_spotify_id[track_key] = track_id
@@ -1061,7 +1083,7 @@ class SpotifyManager:
         found_tracks = [spotify_id for spotify_id, _, _ in ordered_tracks]
 
         # Build missing tracks list for display
-        missing_tracks = [unique_by_name[tk] for tk in missing_track_keys]
+        missing_tracks = [unique_by_name[tk][0] for tk in missing_track_keys]
 
         if missing_tracks:
             console.print(f"[yellow]⚠[/yellow] {len(missing_tracks)} tracks not found:\\n")

@@ -1668,6 +1668,7 @@ def spotify(
     sync: bool = typer.Option(False, "--sync", help="Update all playlists currently tracked in state"),
     dry_run: bool = typer.Option(False, "-n", "--dry-run", help="Dry run mode (no write operations)"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Show all Spotify API calls"),
+    search_missing: bool = typer.Option(False, "-U", "--search-missing", help="Re-search missing tracks (ignore cache for tracks not found)"),
 ):
     """Manage Spotify playlists for TGL episodes
 
@@ -1724,7 +1725,7 @@ def spotify(
 
     # Initialize Spotify manager
     from .spotify import SpotifyManager
-    spotify_manager = SpotifyManager(settings, dry_run=dry_run, verbose=verbose)
+    spotify_manager = SpotifyManager(settings, dry_run=dry_run, verbose=verbose, force_search_missing=search_missing)
 
     # If no arguments/options provided, just run authorization
     if not episodes and not years and not all_years and not all_tracks and not sync:

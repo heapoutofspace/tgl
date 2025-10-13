@@ -70,18 +70,20 @@ class EpisodeStatus:
 
 class OverallProgressPanel(Static):
     """Panel showing overall progress statistics"""
-    
+
     total_episodes = reactive(0)
     completed_episodes = reactive(0)
     failed_episodes = reactive(0)
-    
+    current_episode = reactive(None)
+    current_transcription_progress = reactive(0.0)
+
     def render(self) -> Text:
         """Render the overall progress"""
         progress_pct = (
-            (self.completed_episodes / self.total_episodes * 100) 
+            (self.completed_episodes / self.total_episodes * 100)
             if self.total_episodes > 0 else 0
         )
-        
+
         text = Text()
         text.append("Overall Progress\n", style="bold cyan")
         text.append(f"━" * 40 + "\n", style="cyan")
@@ -91,6 +93,14 @@ class OverallProgressPanel(Static):
         text.append(f"Failed: ", style="red")
         text.append(f"{self.failed_episodes}\n")
         text.append(f"Progress: {progress_pct:.1f}%\n", style="bold")
+
+        # Show current transcription if active
+        if self.current_episode:
+            text.append("\n")
+            text.append(f"Currently Transcribing:\n", style="bold magenta")
+            text.append(f"{self.current_episode}\n", style="magenta")
+            text.append(f"Progress: {self.current_transcription_progress:.1f}%\n", style="magenta")
+
         return text
 
 
@@ -163,54 +173,25 @@ class DownloadPanel(Static):
 
 class TranscriptionPanel(ScrollableContainer):
     """Panel showing live transcription text with scrolling"""
-    
-    current_episode = reactive(None)
-    transcription_progress = reactive(0.0)
+
     transcription_segments = reactive(list)
-    
-    MAX_SEGMENTS = 50  # Keep last 50 segments visible
-    
+
     def compose(self) -> ComposeResult:
         """Compose the transcription panel"""
-        yield Static(id="transcription-header")
         yield Static(id="transcription-content")
-    
+
     def watch_transcription_segments(self, segments: List[str]) -> None:
         """Update transcription content when segments change"""
         content_widget = self.query_one("#transcription-content", Static)
-        
-        # Keep only the last MAX_SEGMENTS
-        display_segments = segments[-self.MAX_SEGMENTS:] if len(segments) > self.MAX_SEGMENTS else segments
-        
+
         text = Text()
-        for segment in display_segments:
+        for segment in segments:
             text.append(segment + "\n")
-        
+
         content_widget.update(text)
-        
+
         # Auto-scroll to bottom
         self.scroll_end(animate=False)
-    
-    def watch_current_episode(self, episode_id: Optional[str]) -> None:
-        """Update header when episode changes"""
-        self._update_header()
-
-    def watch_transcription_progress(self, progress: float) -> None:
-        """Update header when progress changes"""
-        self._update_header()
-
-    def _update_header(self) -> None:
-        """Update the transcription header"""
-        header_widget = self.query_one("#transcription-header", Static)
-
-        if self.current_episode:
-            text = Text()
-            text.append(f"Transcribing: {self.current_episode}\n", style="bold magenta")
-            text.append(f"Progress: {self.transcription_progress:.1f}%\n")
-            text.append(f"━" * 60 + "\n", style="magenta")
-            header_widget.update(text)
-        else:
-            header_widget.update(Text("Waiting for transcription...\n", style="dim"))
 
 
 class TranscriptionApp(App):
@@ -319,10 +300,11 @@ class TranscriptionApp(App):
                 status.download_progress = download_progress
             if transcription_progress is not None:
                 status.transcription_progress = transcription_progress
-                # Update transcription panel if this is the current episode
-                transcription = self.query_one("#transcription-panel", TranscriptionPanel)
-                if transcription.current_episode == status.episode.episode_id:
-                    transcription.transcription_progress = transcription_progress
+                # Update overall panel if this is the current episode
+                overall = self.query_one("#overall-progress", OverallProgressPanel)
+                if overall.current_episode == status.episode.episode_id:
+                    overall.current_transcription_progress = transcription_progress
+                    overall.refresh()
             if error_message is not None:
                 status.error_message = error_message
 
@@ -339,6 +321,13 @@ class TranscriptionApp(App):
             overall = self.query_one("#overall-progress", OverallProgressPanel)
             overall.completed_episodes = completed
             overall.failed_episodes = failed
+
+            # Clear current transcription from overall panel when episode completes or fails
+            if state in (EpisodeState.TRANSCRIBED, EpisodeState.ERROR):
+                if overall.current_episode == status.episode.episode_id:
+                    overall.current_episode = None
+                    overall.current_transcription_progress = 0.0
+
             overall.refresh()
 
             # Update episode list
@@ -362,11 +351,16 @@ class TranscriptionApp(App):
         """Set the current episode being transcribed"""
         if guid in self.episode_statuses:
             status = self.episode_statuses[guid]
+
+            # Update overall progress panel to show current transcription
+            overall = self.query_one("#overall-progress", OverallProgressPanel)
+            overall.current_episode = status.episode.episode_id
+            overall.current_transcription_progress = 0.0
+            overall.refresh()
+
+            # Clear segments when starting new episode
             transcription = self.query_one("#transcription-panel", TranscriptionPanel)
-            transcription.current_episode = status.episode.episode_id
-            transcription.transcription_progress = status.transcription_progress
-            # Create new list to trigger reactive watcher
-            transcription.transcription_segments = status.transcription_text.copy()
+            transcription.transcription_segments = []
     
     def update_download_progress(self, episode_id: str, progress: float, speed: str = "") -> None:
         """Update download progress"""

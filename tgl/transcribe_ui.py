@@ -86,11 +86,8 @@ class OverallProgressPanel(Static):
     def compose(self) -> ComposeResult:
         """Compose the panel with progress indicators"""
         yield Static(id="overall-text")
-        yield Container(
-            LoadingIndicator(id="vad-spinner"),
-            ProgressBar(id="transcription-progress-bar", show_eta=False),
-            id="progress-container"
-        )
+        yield LoadingIndicator(id="vad-spinner")
+        yield ProgressBar(id="transcription-progress-bar", show_eta=False)
 
     def on_mount(self) -> None:
         """Initialize the progress indicators as hidden"""

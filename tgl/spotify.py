@@ -10,16 +10,69 @@ import json
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 import spotipy
 from spotipy.oauth2 import SpotifyClientCredentials, SpotifyOAuth
 from spotipy.cache_handler import CacheHandler
 from rich.console import Console
+from pydantic import BaseModel, Field
 
 from .config import Settings, paths
 from .models import Episode, TrackInfo
 
 console = Console()
+
+
+class SpotifyTrackCache(BaseModel):
+    """Cached Spotify track search result"""
+    id: Optional[str] = None
+    name: Optional[str] = None
+    artists: Optional[List[str]] = None
+    timestamp: str = Field(default_factory=lambda: datetime.now().isoformat())
+
+
+class SpotifyPlaylist(BaseModel):
+    """Spotify playlist state"""
+    id: str
+    name: str
+    tracks: List[str] = Field(default_factory=list)
+    cover_version: Optional[int] = None
+
+
+class SpotifyState(BaseModel):
+    """Spotify manager state persisted to spotify.json"""
+    tracks: Dict[str, SpotifyTrackCache] = Field(default_factory=dict)
+    playlists: Dict[str, SpotifyPlaylist] = Field(default_factory=dict)
+    oauth_token: Optional[Dict[str, Any]] = None
+
+    def to_dict(self) -> Dict:
+        """Convert to dictionary for JSON serialization"""
+        return self.model_dump(mode='json')
+
+    @classmethod
+    def from_dict(cls, data: Dict) -> 'SpotifyState':
+        """Create from dictionary, handling legacy formats"""
+        # Handle legacy track cache format (plain dicts)
+        tracks = {}
+        for key, value in data.get('tracks', {}).items():
+            if isinstance(value, dict):
+                tracks[key] = SpotifyTrackCache(**value)
+            else:
+                tracks[key] = value
+
+        # Handle legacy playlist format (plain dicts)
+        playlists = {}
+        for key, value in data.get('playlists', {}).items():
+            if isinstance(value, dict):
+                playlists[key] = SpotifyPlaylist(**value)
+            else:
+                playlists[key] = value
+
+        return cls(
+            tracks=tracks,
+            playlists=playlists,
+            oauth_token=data.get('oauth_token')
+        )
 
 
 class IntegratedCacheHandler(CacheHandler):
@@ -32,14 +85,14 @@ class IntegratedCacheHandler(CacheHandler):
     the cache handler and the manager's state.
     """
 
-    def __init__(self, state_dict: Dict, state_file: Path):
+    def __init__(self, state: SpotifyState, state_file: Path):
         """Initialize cache handler
 
         Args:
-            state_dict: Reference to SpotifyManager's in-memory state dict
+            state: Reference to SpotifyManager's SpotifyState instance
             state_file: Path to spotify.json file (for persistence)
         """
-        self.state = state_dict
+        self.state = state
         self.state_file = state_file
 
     def get_cached_token(self) -> Optional[Dict]:
@@ -48,7 +101,7 @@ class IntegratedCacheHandler(CacheHandler):
         Returns:
             Token info dict or None if not found
         """
-        return self.state.get('oauth_token')
+        return self.state.oauth_token
 
     def save_token_to_cache(self, token_info: Dict):
         """Save OAuth token to in-memory state and persist to file
@@ -57,13 +110,13 @@ class IntegratedCacheHandler(CacheHandler):
             token_info: Token info dict from Spotify OAuth
         """
         # Update in-memory state
-        self.state['oauth_token'] = token_info
+        self.state.oauth_token = token_info
 
         # Persist to file immediately
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.state_file, 'w') as f:
-                json.dump(self.state, f, indent=2)
+                json.dump(self.state.to_dict(), f, indent=2)
         except IOError as e:
             console.print(f"[red]Error saving OAuth token: {e}[/red]")
 
@@ -90,24 +143,21 @@ class SpotifyManager:
         self._user_client = None
         self._user_id = None
 
-    def _load_state(self) -> Dict:
+    def _load_state(self) -> SpotifyState:
         """Load state from spotify.json"""
         if self.state_file.exists():
             try:
                 with open(self.state_file, 'r') as f:
-                    return json.load(f)
+                    data = json.load(f)
+                return SpotifyState.from_dict(data)
             except (json.JSONDecodeError, IOError) as e:
                 console.print(f"[yellow]Warning: Could not load Spotify state: {e}[/yellow]")
                 return self._empty_state()
         return self._empty_state()
 
-    def _empty_state(self) -> Dict:
+    def _empty_state(self) -> SpotifyState:
         """Return empty state structure"""
-        return {
-            "tracks": {},  # {search_key: {id, name, artists}}
-            "playlists": {},  # {playlist_key: {id, name, tracks: [track_ids]}}
-            "oauth_token": None  # OAuth token cache for user authentication
-        }
+        return SpotifyState()
 
     def _log_api_call(self, operation: str, details: str = ""):
         """Log Spotify API call in verbose mode
@@ -161,7 +211,7 @@ class SpotifyManager:
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             with open(self.state_file, 'w') as f:
-                json.dump(self.state, f, indent=2)
+                json.dump(self.state.to_dict(), f, indent=2)
         except IOError as e:
             console.print(f"[red]Error saving Spotify state: {e}[/red]")
 
@@ -374,18 +424,18 @@ class SpotifyManager:
         search_key = self._make_search_key(track.artist, track.title, track.variant)
 
         # Check cache first
-        if search_key in self.state["tracks"]:
-            cached = self.state["tracks"][search_key]
+        if search_key in self.state.tracks:
+            cached = self.state.tracks[search_key]
 
             # Check if this is a cache hit (has track id)
-            if "id" in cached:
+            if cached.id:
                 self._log_api_call("CACHE_HIT", f"{track.artist} - {track.title}")
-                return (cached["id"], cached["name"], cached["artists"])
+                return (cached.id, cached.name, cached.artists)
 
             # This is a cached miss - check if it's still valid (less than 1 day old)
-            if "timestamp" in cached:
+            if cached.timestamp:
                 try:
-                    cached_time = datetime.fromisoformat(cached["timestamp"])
+                    cached_time = datetime.fromisoformat(cached.timestamp)
                     age = datetime.now() - cached_time
                     if age < timedelta(days=1):
                         self._log_api_call("CACHE_MISS", f"{track.artist} - {track.title} (cached)")
@@ -417,12 +467,11 @@ class SpotifyManager:
                     artists = [artist['name'] for artist in track_data['artists']]
 
                     # Cache the result with timestamp
-                    self.state["tracks"][search_key] = {
-                        "id": track_id,
-                        "name": track_name,
-                        "artists": artists,
-                        "timestamp": datetime.now().isoformat()
-                    }
+                    self.state.tracks[search_key] = SpotifyTrackCache(
+                        id=track_id,
+                        name=track_name,
+                        artists=artists
+                    )
                     self._save_state(tracks_only=True)
 
                     return (track_id, track_name, artists)
@@ -443,12 +492,11 @@ class SpotifyManager:
                     artists = [artist['name'] for artist in track_data['artists']]
 
                     # Cache the result with timestamp
-                    self.state["tracks"][search_key] = {
-                        "id": track_id,
-                        "name": track_name,
-                        "artists": artists,
-                        "timestamp": datetime.now().isoformat()
-                    }
+                    self.state.tracks[search_key] = SpotifyTrackCache(
+                        id=track_id,
+                        name=track_name,
+                        artists=artists
+                    )
                     self._save_state(tracks_only=True)
 
                     return (track_id, track_name, artists)
@@ -471,12 +519,11 @@ class SpotifyManager:
                     artists = [artist['name'] for artist in track_data['artists']]
 
                     # Cache the result with timestamp
-                    self.state["tracks"][search_key] = {
-                        "id": track_id,
-                        "name": track_name,
-                        "artists": artists,
-                        "timestamp": datetime.now().isoformat()
-                    }
+                    self.state.tracks[search_key] = SpotifyTrackCache(
+                        id=track_id,
+                        name=track_name,
+                        artists=artists
+                    )
                     self._save_state(tracks_only=True)
 
                     return (track_id, track_name, artists)
@@ -498,12 +545,11 @@ class SpotifyManager:
                         console.print(f"[yellow]  Note: Found with swapped artist/title[/yellow]")
 
                         # Cache the result with timestamp
-                        self.state["tracks"][search_key] = {
-                            "id": track_id,
-                            "name": track_name,
-                            "artists": artists,
-                            "timestamp": datetime.now().isoformat()
-                        }
+                        self.state.tracks[search_key] = SpotifyTrackCache(
+                            id=track_id,
+                            name=track_name,
+                            artists=artists
+                        )
                         self._save_state(tracks_only=True)
 
                         return (track_id, track_name, artists)
@@ -514,9 +560,7 @@ class SpotifyManager:
                 console.print(f"  [dim]Variant: {track.variant}[/dim]")
 
             # Cache miss to avoid re-searching for 1 day
-            self.state["tracks"][search_key] = {
-                "timestamp": datetime.now().isoformat()
-            }
+            self.state.tracks[search_key] = SpotifyTrackCache()
             self._save_state(tracks_only=True)
 
             return None
@@ -525,9 +569,7 @@ class SpotifyManager:
             console.print(f"[red]Error searching track {track.artist} - {track.title}: {e}[/red]")
 
             # Cache miss to avoid re-searching for 1 day
-            self.state["tracks"][search_key] = {
-                "timestamp": datetime.now().isoformat()
-            }
+            self.state.tracks[search_key] = SpotifyTrackCache()
             self._save_state(tracks_only=True)
 
             return None
@@ -612,8 +654,8 @@ class SpotifyManager:
 
         # Check if we've already created this playlist
         playlist_id = None
-        if playlist_key in self.state["playlists"]:
-            playlist_id = self.state["playlists"][playlist_key]["id"]
+        if playlist_key in self.state.playlists:
+            playlist_id = self.state.playlists[playlist_key].id
 
         # Verify playlist still exists on Spotify
         if playlist_id:
@@ -628,7 +670,7 @@ class SpotifyManager:
         # Get existing tracks in playlist
         existing_track_ids = set()
         if playlist_id:
-            existing_track_ids = set(self.state["playlists"][playlist_key].get("tracks", []))
+            existing_track_ids = set(self.state.playlists[playlist_key].tracks)
 
         # Create playlist if it doesn't exist
         if not playlist_id:
@@ -686,17 +728,17 @@ class SpotifyManager:
 
         # Upload cover art if needed
         from .cover import COVER_VERSION
-        current_cover_version = self.state["playlists"].get(playlist_key, {}).get("cover_version")
+        current_cover_version = self.state.playlists.get(playlist_key, SpotifyPlaylist(id="", name="")).cover_version
         if current_cover_version != COVER_VERSION:
             self._upload_cover(playlist_id, episode.episode_id)
 
         # Update state
-        self.state["playlists"][playlist_key] = {
-            "id": playlist_id,
-            "name": playlist_name,
-            "tracks": track_ids,
-            "cover_version": COVER_VERSION
-        }
+        self.state.playlists[playlist_key] = SpotifyPlaylist(
+            id=playlist_id,
+            name=playlist_name,
+            tracks=track_ids,
+            cover_version=COVER_VERSION
+        )
         self._save_state()
 
         playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
@@ -818,8 +860,8 @@ class SpotifyManager:
 
         # Check if we've already created this playlist
         playlist_id = None
-        if playlist_key in self.state["playlists"]:
-            playlist_id = self.state["playlists"][playlist_key]["id"]
+        if playlist_key in self.state.playlists:
+            playlist_id = self.state.playlists[playlist_key].id
 
         # Verify playlist still exists on Spotify
         if playlist_id:
@@ -833,7 +875,7 @@ class SpotifyManager:
         # Get existing tracks in playlist (as list to preserve order)
         existing_track_ids = []
         if playlist_id:
-            existing_track_ids = self.state["playlists"][playlist_key].get("tracks", [])
+            existing_track_ids = self.state.playlists[playlist_key].tracks
 
         # Create playlist if it doesn't exist
         if not playlist_id:
@@ -912,17 +954,17 @@ class SpotifyManager:
 
         # Upload cover art if needed
         from .cover import COVER_VERSION
-        current_cover_version = self.state["playlists"].get(playlist_key, {}).get("cover_version")
+        current_cover_version = self.state.playlists.get(playlist_key, SpotifyPlaylist(id="", name="")).cover_version
         if current_cover_version != COVER_VERSION:
             self._upload_cover(playlist_id, str(year))
 
         # Update state
-        self.state["playlists"][playlist_key] = {
-            "id": playlist_id,
-            "name": playlist_name,
-            "tracks": track_ids,
-            "cover_version": COVER_VERSION
-        }
+        self.state.playlists[playlist_key] = SpotifyPlaylist(
+            id=playlist_id,
+            name=playlist_name,
+            tracks=track_ids,
+            cover_version=COVER_VERSION
+        )
         self._save_state()
 
         playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"
@@ -1041,8 +1083,8 @@ class SpotifyManager:
 
         # Check if we've already created this playlist
         playlist_id = None
-        if playlist_key in self.state["playlists"]:
-            playlist_id = self.state["playlists"][playlist_key]["id"]
+        if playlist_key in self.state.playlists:
+            playlist_id = self.state.playlists[playlist_key].id
 
         # Verify playlist still exists on Spotify
         if playlist_id:
@@ -1056,7 +1098,7 @@ class SpotifyManager:
         # Get existing tracks in playlist (as list to preserve order)
         existing_track_ids = []
         if playlist_id:
-            existing_track_ids = self.state["playlists"][playlist_key].get("tracks", [])
+            existing_track_ids = self.state.playlists[playlist_key].tracks
 
         # Create playlist if it doesn't exist
         if not playlist_id:
@@ -1135,17 +1177,17 @@ class SpotifyManager:
 
         # Upload cover art if needed (no text for all-tracks playlist)
         from .cover import COVER_VERSION
-        current_cover_version = self.state["playlists"].get(playlist_key, {}).get("cover_version")
+        current_cover_version = self.state.playlists.get(playlist_key, SpotifyPlaylist(id="", name="")).cover_version
         if current_cover_version != COVER_VERSION:
             self._upload_cover(playlist_id, None)
 
         # Update state
-        self.state["playlists"][playlist_key] = {
-            "id": playlist_id,
-            "name": playlist_name,
-            "tracks": found_tracks,  # Store in order
-            "cover_version": COVER_VERSION
-        }
+        self.state.playlists[playlist_key] = SpotifyPlaylist(
+            id=playlist_id,
+            name=playlist_name,
+            tracks=found_tracks,  # Store in order
+            cover_version=COVER_VERSION
+        )
         self._save_state()
 
         playlist_url = f"https://open.spotify.com/playlist/{playlist_id}"

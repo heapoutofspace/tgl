@@ -197,16 +197,29 @@ class EpisodeListPanel(Static):
                 state_str = f"🎤 Transcribing {status.transcription_progress:.0f}%"
                 state_style = "magenta"
             elif status.state == EpisodeState.TRANSCRIBED:
-                state_str = "✅ Complete"
-                state_style = "green"
+                # Calculate elapsed time if available
+                status_text = Text()
+                status_text.append("✅ Complete", style="green")
+                if status.start_time and status.end_time:
+                    elapsed = status.end_time - status.start_time
+                    total_seconds = int(elapsed.total_seconds())
+                    minutes = total_seconds // 60
+                    seconds = total_seconds % 60
+                    status_text.append(f" ({minutes}m {seconds}s)", style="dim")
             else:  # ERROR
                 state_str = "❌ Error"
                 state_style = "red"
-            
+
+            # Build the status cell
+            if status.state == EpisodeState.TRANSCRIBED:
+                status_cell = status_text
+            else:
+                status_cell = Text(state_str, style=state_style)
+
             table.add_row(
                 ep.episode_id or str(ep.id),
                 title,
-                Text(state_str, style=state_style)
+                status_cell
             )
         
         return table
@@ -474,7 +487,9 @@ class TranscriptionApp(App):
         guid = message.get("guid")
 
         if msg_type == "start":
-            # Transcription starting
+            # Transcription starting - record start time
+            if guid in self.episode_statuses:
+                self.episode_statuses[guid].start_time = datetime.now()
             self.update_episode_state(
                 guid,
                 EpisodeState.TRANSCRIBING,
@@ -503,7 +518,9 @@ class TranscriptionApp(App):
             self.add_transcription_segment(guid, text)
 
         elif msg_type == "complete":
-            # Transcription complete
+            # Transcription complete - record end time
+            if guid in self.episode_statuses:
+                self.episode_statuses[guid].end_time = datetime.now()
             text = message.get("text", "")
             segments = message.get("segments")
             # Save transcription with timestamps

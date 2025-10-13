@@ -248,10 +248,12 @@ def transcribe_audio(
             compute_type=compute_type,
             download_root=None,  # Use default cache location
         )
+        kwargs = {}
 
         # Use BatchedInferencePipeline for faster processing if batch_size is specified
         if batch_size:
-            model = BatchedInferencePipeline(model=base_model, batch_size=batch_size)
+            model = BatchedInferencePipeline(model=base_model)
+            kwargs['batch_size'] = batch_size
             if not segment_callback:
                 console.print(f"[dim]Model: {model_size}, Language: {language}, Device: {device}, Compute: {compute_type}, Batch: {batch_size}[/dim]")
         else:
@@ -262,12 +264,15 @@ def transcribe_audio(
         # Transcribe the audio
         # beam_size=5 is a good balance between speed and accuracy
         # vad_filter=True enables voice activity detection to skip silence
+        # initial_prompt provides context to improve accuracy for proper nouns and domain terminology
         segments, info = model.transcribe(
             str(audio_path),
             language=language,
-            # beam_size=5,
+            beam_size=5,
             vad_filter=True,
-            # vad_parameters=dict(min_silence_duration_ms=500),
+            vad_parameters=dict(min_silence_duration_ms=500),
+            initial_prompt="This is The Guestlist, a moderated music podcast by Fear of Tigers featuring electronic music tracks, artist names, and commentary.",
+            **kwargs
         )
 
         # Collect all segment texts and timestamps with callbacks

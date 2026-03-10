@@ -1777,7 +1777,7 @@ def spotify(
 
     # Handle --sync: update all playlists in state
     if sync:
-        playlists = spotify_manager.state.get("playlists", {})
+        playlists = spotify_manager.state.playlists
 
         if not playlists:
             console.print("\n[yellow]No playlists tracked in state yet[/yellow]")

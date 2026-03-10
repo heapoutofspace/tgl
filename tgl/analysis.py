@@ -335,4 +335,50 @@ class TrackAnalyzer:
                     artist, title = parts
                     console.print(f"  {i}. {artist} - {title} [dim]({count} episodes)[/dim]")
 
+        # Aggregate artist appearances
+        if total_tracks > 0:
+            console.print("\n[bold cyan]Most Played Artists:[/bold cyan]")
+            artist_appearances = {}
+            for track_key, data in self.db.tracks.items():
+                parts = track_key.split('|', 1)
+                if len(parts) == 2:
+                    artist = parts[0]
+                    # Count total episode appearances for this artist
+                    if artist not in artist_appearances:
+                        artist_appearances[artist] = 0
+                    artist_appearances[artist] += len(data.episodes)
+
+            # Sort by total appearances and show top 10
+            top_artists = sorted(
+                artist_appearances.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:10]
+
+            for i, (artist, count) in enumerate(top_artists, 1):
+                console.print(f"  {i}. {artist} [dim]({count} appearances)[/dim]")
+
+        # Aggregate tags/genres
+        if tracks_with_tags > 0:
+            console.print("\n[bold cyan]Most Common Genres/Tags:[/bold cyan]")
+            tag_counts = {}
+            for data in self.db.tracks.values():
+                if data.lastfm_tags:
+                    for tag in data.lastfm_tags:
+                        tag_name = tag.get('name', '').lower()
+                        if tag_name:
+                            if tag_name not in tag_counts:
+                                tag_counts[tag_name] = 0
+                            tag_counts[tag_name] += 1
+
+            # Sort by track count and show top 20
+            top_tags = sorted(
+                tag_counts.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )[:20]
+
+            for i, (tag, count) in enumerate(top_tags, 1):
+                console.print(f"  {i}. {tag} [dim]({count} tracks)[/dim]")
+
         console.print()
